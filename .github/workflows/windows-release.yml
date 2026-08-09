@@ -8,6 +8,13 @@ on:
     branches: ["main"]
     tags: ["v5.*"]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-build-package:
     runs-on: windows-latest
@@ -21,12 +28,25 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+      - name: Validate required repository files
+        shell: pwsh
+        run: |
+          $required = @(
+            "admin_launcher.py",
+            "staff_launcher.py",
+            "build/admin.spec",
+            "build/staff.spec",
+            "installer/CNKH_POS_V5.iss",
+            "tools/windows_gui_acceptance.py"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) { throw "Missing required files: $($missing -join ', ')" }
       - name: Install dependencies
-        run: pip install -r requirements-build.txt
+        run: python -m pip install -r requirements-build.txt
       - name: Compile Qt resources
         run: pyside6-rcc resources/resources.qrc -o cnkh_pos/resources_rc.py
       - name: Automated tests
-        run: pytest -q --disable-warnings --maxfail=1
+        run: python -m pytest -q --disable-warnings --maxfail=1
       - name: Source self-test
         run: python tools/source_self_test.py
       - name: Windows GUI acceptance 100 percent
@@ -45,6 +65,14 @@ jobs:
         run: pyinstaller --noconfirm --clean build/admin.spec
       - name: Build Staff EXE
         run: pyinstaller --noconfirm --clean build/staff.spec
+      - name: Verify packaged EXEs
+        shell: pwsh
+        run: |
+          $executables = @("dist/CNKH_POS_Admin.exe", "dist/CNKH_POS_Staff.exe")
+          foreach ($file in $executables) {
+            if (-not (Test-Path $file)) { throw "Missing packaged executable: $file" }
+            if ((Get-Item $file).Length -lt 10MB) { throw "Packaged executable is unexpectedly small: $file" }
+          }
       - name: Packaged Admin self-test
         run: dist\CNKH_POS_Admin.exe --self-test
       - name: Packaged Staff self-test
@@ -54,17 +82,71 @@ jobs:
         run: |
           if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup --no-progress -y }
           iscc installer\CNKH_POS_V5.iss
+      - name: Silent install and installed self-tests
+        shell: pwsh
+        run: |
+          $setup = (Resolve-Path "release/CNKH_Hardware_POS_V5_Setup.exe").Path
+          $installDir = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Installed"
+          $process = Start-Process -FilePath $setup -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/DIR=$installDir"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Silent installer failed: $($process.ExitCode)" }
+          $admin = Join-Path $installDir "CNKH_POS_Admin.exe"
+          $staff = Join-Path $installDir "CNKH_POS_Staff.exe"
+          if (-not (Test-Path $admin) -or -not (Test-Path $staff)) {
+            throw "Installed Admin or Staff executable is missing"
+          }
+          & $admin --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Installed Admin self-test failed" }
+          & $staff --self-test
+          if ($LASTEXITCODE -ne 0) { throw "Installed Staff self-test failed" }
       - name: Release manifest
         shell: pwsh
         run: |
           $files = Get-ChildItem dist\*.exe, release\*.exe
           $manifest = $files | ForEach-Object { [pscustomobject]@{ file=$_.Name; sha256=(Get-FileHash $_.FullName -Algorithm SHA256).Hash; bytes=$_.Length } }
           $manifest | ConvertTo-Json | Set-Content release\release-manifest.json -Encoding UTF8
-      - uses: actions/upload-artifact@v4
+          $files | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name } | Set-Content release\SHA256SUMS.txt -Encoding ascii
+      - name: Verify release package
+        shell: pwsh
+        run: |
+          $required = @(
+            "dist/CNKH_POS_Admin.exe",
+            "dist/CNKH_POS_Staff.exe",
+            "release/CNKH_Hardware_POS_V5_Setup.exe",
+            "release/release-manifest.json",
+            "release/SHA256SUMS.txt"
+          )
+          $missing = $required | Where-Object { -not (Test-Path $_) }
+          if ($missing) { throw "Release package is incomplete: $($missing -join ', ')" }
+          $installerSources = Select-String -Path installer/CNKH_POS_V5.iss -Pattern '^Source:'
+          if ($installerSources.Count -ne 2) { throw "Installer must contain exactly two executable sources" }
+          $installerText = Get-Content installer/CNKH_POS_V5.iss -Raw
+          if ($installerText -notmatch 'CNKH_POS_Admin.exe' -or $installerText -notmatch 'CNKH_POS_Staff.exe') {
+            throw "Installer source list does not contain both Admin and Staff EXEs"
+          }
+      - name: Prepare download package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path release-package -Force | Out-Null
+          Copy-Item dist/CNKH_POS_Admin.exe release-package/
+          Copy-Item dist/CNKH_POS_Staff.exe release-package/
+          Copy-Item release/CNKH_Hardware_POS_V5_Setup.exe release-package/
+          Copy-Item release/release-manifest.json release-package/
+          Copy-Item release/SHA256SUMS.txt release-package/
+          Copy-Item ui-acceptance-artifacts release-package/ui-acceptance-artifacts -Recurse
+          [pscustomobject]@{
+            version = (Get-Content VERSION -Raw).Trim()
+            commit = "${{ github.sha }}"
+            workflow_run = "${{ github.run_number }}"
+          } | ConvertTo-Json | Set-Content release-package/build-info.json -Encoding UTF8
+      - name: Upload tested Windows package
+        uses: actions/upload-artifact@v4
         with:
           name: CNKH-Hardware-POS-V5-Windows
-          path: |
-            release/CNKH_Hardware_POS_V5_Setup.exe
-            release/release-manifest.json
-            ui-acceptance-artifacts/**
+          path: release-package/
           if-no-files-found: error
+          retention-days: 90
