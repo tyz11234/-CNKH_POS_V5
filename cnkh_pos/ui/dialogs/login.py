@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from cnkh_pos.database.connection import Database
-from cnkh_pos.services.auth import AuthService, AuthenticatedUser
+from cnkh_pos.services.auth import AuthenticatedUser, AuthService
 
 
 class FirstAdminDialog(QDialog):

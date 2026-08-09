@@ -135,6 +135,25 @@ class CatalogService:
                     product_id,
                 ),
             )
+            old_stock = parse_quantity(before["stock_decimal"])
+            new_stock = parse_quantity(data.stock)
+            if old_stock != new_stock:
+                conn.execute(
+                    """INSERT INTO stock_movements(
+                        product_id,source_type,reference,old_stock_decimal,change_decimal,
+                        new_stock_decimal,operator_id,created_at,notes
+                    ) VALUES (?, 'PRODUCT_EDIT', ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        product_id,
+                        f"PRODUCT-{product_id}",
+                        quantity_text(old_stock),
+                        quantity_text(new_stock - old_stock),
+                        quantity_text(new_stock),
+                        admin_id,
+                        now,
+                        "Manual stock edit from product form",
+                    ),
+                )
             if (
                 int(before["cost_cents"]) != data.cost_cents
                 or int(before["selling_price_cents"]) != data.selling_price_cents

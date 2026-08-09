@@ -4,12 +4,13 @@ import sys
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QMessageBox, QMainWindow
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox
 
 from cnkh_pos.config import APP_VERSION, AppPaths
 from cnkh_pos.database import Database, DatabaseStartupError, bootstrap_database
-from cnkh_pos.services.error_log import write_error_log
 from cnkh_pos.services.auth import AuthenticatedUser
+from cnkh_pos.services.backup import ShutdownBackupGuard
+from cnkh_pos.services.error_log import write_error_log
 from cnkh_pos.ui.dialogs.login import FirstAdminDialog, LoginDialog
 from cnkh_pos.ui.theme import apply_theme
 
@@ -33,14 +34,14 @@ def run_application(
         database = Database(paths.database)
         conn = database.connect(readonly=True)
         try:
-            user_count = int(
-                conn.execute("SELECT COUNT(*) FROM users WHERE is_active=1").fetchone()[
-                    0
-                ]
+            admin_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM users WHERE is_active=1 AND role='ADMIN'"
+                ).fetchone()[0]
             )
         finally:
             conn.close()
-        if user_count == 0:
+        if admin_count == 0:
             if mode.lower() != "admin":
                 QMessageBox.information(
                     None, "CNKH POS", "请先从 Admin 程序建立第一个管理员账号。"
@@ -60,7 +61,12 @@ def run_application(
             user = login.user
         window = window_factory(database, user)
         window.show()
-        return app.exec()
+        exit_code = app.exec()
+        try:
+            ShutdownBackupGuard(paths.database, paths.backups, mode=mode).run()
+        except BaseException as exc:
+            write_error_log(paths.logs, exc, app_mode=f"{mode}-auto-backup")
+        return exit_code
     except DatabaseStartupError as exc:
         write_error_log(paths.logs, exc, app_mode=mode)
         QMessageBox.critical(

@@ -6,9 +6,8 @@ from pathlib import Path
 
 from cnkh_pos import __version__
 
-
 APP_NAME = "CNKH Hardware POS"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def _local_app_data() -> Path:
@@ -27,6 +26,7 @@ class AppPaths:
     backups: Path
     logs: Path
     exports: Path
+    receipts: Path
 
     @classmethod
     def default(cls) -> "AppPaths":
@@ -38,10 +38,18 @@ class AppPaths:
             backups=root / "Backups",
             logs=root / "Logs",
             exports=root / "Exports",
+            receipts=root / "Receipts",
         )
 
     def ensure_directories(self) -> None:
-        for folder in (self.root, self.data, self.backups, self.logs, self.exports):
+        for folder in (
+            self.root,
+            self.data,
+            self.backups,
+            self.logs,
+            self.exports,
+            self.receipts,
+        ):
             folder.mkdir(parents=True, exist_ok=True)
 
 

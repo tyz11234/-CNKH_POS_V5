@@ -16,6 +16,10 @@ class RestoreService:
 
     def restore(self, backup_path: Path, *, admin_id: int, password: str) -> Path:
         backup_path = Path(backup_path)
+        if not backup_path.is_file():
+            raise FileNotFoundError(backup_path)
+        if backup_path.resolve() == self.database.path.resolve():
+            raise ValueError("the active database cannot be selected as its own backup")
         conn = self.database.connect(readonly=True)
         try:
             admin = conn.execute(
@@ -37,16 +41,28 @@ class RestoreService:
         finally:
             source.close()
         safety = (
-            BackupService(self.backup_dir)
-            .create(self.database.path, reason="pre_restore")
-            .path
+            BackupService(self.backup_dir).create(
+                self.database.path, reason="pre_restore"
+            ).path
         )
-        source = sqlite3.connect(backup_path)
-        target = sqlite3.connect(self.database.path)
+        BackupService(self.backup_dir).prune(keep=30)
         try:
-            source.backup(target)
-        finally:
-            target.close()
-            source.close()
-        bootstrap_database(self.database.path, self.backup_dir)
+            source = sqlite3.connect(backup_path)
+            target = sqlite3.connect(self.database.path)
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+                source.close()
+            bootstrap_database(self.database.path, self.backup_dir)
+        except BaseException:
+            source = sqlite3.connect(safety)
+            target = sqlite3.connect(self.database.path)
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+                source.close()
+            bootstrap_database(self.database.path, self.backup_dir)
+            raise
         return safety

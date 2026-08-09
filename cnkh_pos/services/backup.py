@@ -50,3 +50,22 @@ class BackupService:
             path.unlink()
             removed.append(path)
         return removed
+
+
+class ShutdownBackupGuard:
+    """Creates at most one retained backup for one application shutdown flow."""
+
+    def __init__(self, database_path: Path, backup_dir: Path, *, mode: str):
+        self.database_path = Path(database_path)
+        self.backup_dir = Path(backup_dir)
+        self.mode = mode.lower()
+        self._result: BackupResult | None = None
+
+    def run(self) -> BackupResult:
+        if self._result is None:
+            service = BackupService(self.backup_dir)
+            self._result = service.create(
+                self.database_path, reason=f"auto_close_{self.mode}"
+            )
+            service.prune(keep=30)
+        return self._result

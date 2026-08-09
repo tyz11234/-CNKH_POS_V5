@@ -50,6 +50,12 @@ class PurchaseAndPaymentTests(unittest.TestCase):
                     (now, now),
                 ).lastrowid
             )
+            conn.execute(
+                """INSERT INTO supplier_products(
+                    supplier_id,product_id,is_active,created_at,updated_at
+                ) VALUES (?,?,1,?,?)""",
+                (self.supplier_id, self.product_id, now, now),
+            )
 
     def tearDown(self) -> None:
         self.temp.cleanup()

@@ -11,7 +11,6 @@ from cnkh_pos.database.migrations import utc_now_text
 from cnkh_pos.services.catalog import CatalogService, ProductInput, is_valid_ean13
 from cnkh_pos.services.money import rm_to_cents
 
-
 HEADERS = [
     "Product Name",
     "Aliases",

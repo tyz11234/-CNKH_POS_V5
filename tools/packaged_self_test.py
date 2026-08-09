@@ -8,6 +8,7 @@ from pathlib import Path
 def run(mode: str) -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
+
     from cnkh_pos.database.bootstrap import bootstrap_database
     from cnkh_pos.database.connection import Database
     from cnkh_pos.services.auth import AuthService

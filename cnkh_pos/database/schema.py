@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sqlite3
 
-
 CORE_SCHEMA: tuple[str, ...] = (
     """
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -221,6 +220,17 @@ INDEX_SCHEMA: tuple[str, ...] = (
 
 OPERATIONS_SCHEMA: tuple[str, ...] = (
     """
+    CREATE TABLE IF NOT EXISTS supplier_products (
+        supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+        product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        supplier_sku TEXT NOT NULL DEFAULT '',
+        is_active INTEGER NOT NULL DEFAULT 1 CHECK(is_active IN (0,1)),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(supplier_id, product_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS purchase_items (
         id INTEGER PRIMARY KEY,
         purchase_id INTEGER NOT NULL REFERENCES purchases(id) ON DELETE CASCADE,
@@ -238,6 +248,7 @@ OPERATIONS_SCHEMA: tuple[str, ...] = (
         return_no TEXT NOT NULL UNIQUE,
         sale_id INTEGER NOT NULL REFERENCES sales(id) ON DELETE RESTRICT,
         total_cents INTEGER NOT NULL CHECK(total_cents >= 0),
+        refund_method TEXT NOT NULL DEFAULT 'ORIGINAL',
         reason TEXT NOT NULL,
         operator_id INTEGER REFERENCES users(id),
         returned_at TEXT NOT NULL
@@ -323,6 +334,7 @@ OPERATIONS_SCHEMA: tuple[str, ...] = (
         id INTEGER PRIMARY KEY,
         business_date TEXT NOT NULL,
         cashier_id INTEGER REFERENCES users(id),
+        opening_cash_cents INTEGER NOT NULL DEFAULT 0,
         system_cash_cents INTEGER NOT NULL,
         actual_cash_cents INTEGER NOT NULL,
         variance_cents INTEGER NOT NULL,
@@ -353,6 +365,7 @@ OPERATIONS_SCHEMA: tuple[str, ...] = (
 )
 
 OPERATIONS_INDEX_SCHEMA: tuple[str, ...] = (
+    "CREATE INDEX IF NOT EXISTS idx_supplier_products_product ON supplier_products(product_id, is_active)",
     "CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON purchase_items(purchase_id)",
     "CREATE INDEX IF NOT EXISTS idx_returns_sale ON sale_returns(sale_id, returned_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_customer_debts_status ON customer_debts(status, customer_id)",

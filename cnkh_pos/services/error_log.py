@@ -7,7 +7,6 @@ from pathlib import Path
 
 from cnkh_pos.config import APP_VERSION
 
-
 _SENSITIVE = re.compile(
     r"(?i)(password|password_hash|authorization|token|secret)\s*[:=]\s*[^\s,;]+"
 )

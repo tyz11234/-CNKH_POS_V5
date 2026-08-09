@@ -15,9 +15,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cnkh_pos.ui.widgets import Card, StatCard
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.money import format_myr
+from cnkh_pos.ui.widgets import Card, StatCard
 
 
 class DashboardPage(QWidget):

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
 from cnkh_pos.database.connection import Database
 from cnkh_pos.database.migrations import utc_now_text
 from cnkh_pos.services.audit import AuditService
+from cnkh_pos.services.document_numbers import next_document_number
 from cnkh_pos.services.quantities import (
     parse_quantity,
     parse_signed_quantity,
@@ -23,17 +25,9 @@ class StocktakeService:
     def create_draft(self, *, operator_id: int, notes: str = "") -> tuple[int, str]:
         with self.database.transaction() as conn:
             now = utc_now_text()
-            day = now[:10].replace("-", "")
-            count = (
-                int(
-                    conn.execute(
-                        "SELECT COUNT(*) FROM stocktakes WHERE stocktake_no LIKE ?",
-                        (f"ST-{day}-%",),
-                    ).fetchone()[0]
-                )
-                + 1
+            number = next_document_number(
+                conn, "STOCKTAKE", date.fromisoformat(now[:10]), "ST-"
             )
-            number = f"ST-{day}-{count:03d}"
             cursor = conn.execute(
                 "INSERT INTO stocktakes(stocktake_no, started_at, operator_id, notes) VALUES (?, ?, ?, ?)",
                 (number, now, operator_id, notes),

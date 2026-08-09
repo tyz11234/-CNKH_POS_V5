@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 from cnkh_pos.database.connection import Database
 from cnkh_pos.database.migrations import utc_now_text
@@ -53,6 +53,22 @@ class PurchaseService:
     ) -> PurchaseResult:
         if not lines:
             raise PurchaseError("purchase has no items")
+        if payment_method.upper() not in {"CASH", "CARD", "DUITNOW_QR"}:
+            raise PurchaseError("unsupported payment method")
+        combined: dict[int, PurchaseLine] = {}
+        for line in lines:
+            quantity = parse_quantity(line.quantity, allow_zero=False)
+            if line.unit_cost_cents < 0:
+                raise PurchaseError("purchase cost cannot be negative")
+            previous = combined.get(line.product_id)
+            combined[line.product_id] = PurchaseLine(
+                product_id=line.product_id,
+                quantity=quantity
+                if previous is None
+                else parse_quantity(previous.quantity, allow_zero=False) + quantity,
+                unit_cost_cents=line.unit_cost_cents,
+            )
+        normalized_lines = list(combined.values())
         with self.database.transaction() as conn:
             supplier = conn.execute(
                 "SELECT id FROM suppliers WHERE id=? AND is_deleted=0", (supplier_id,)
@@ -61,10 +77,22 @@ class PurchaseService:
                 raise PurchaseError("supplier is not available")
             prepared: list[tuple[object, Decimal, int]] = []
             total = 0
-            for line in lines:
+            allowed_product_ids = {
+                int(row[0])
+                for row in conn.execute(
+                    """SELECT product_id FROM supplier_products
+                       WHERE supplier_id=? AND is_active=1""",
+                    (supplier_id,),
+                )
+            }
+            if not allowed_product_ids:
+                raise PurchaseError(
+                    "supplier has no product catalogue; configure supplied products first"
+                )
+            for line in normalized_lines:
                 quantity = parse_quantity(line.quantity, allow_zero=False)
-                if line.unit_cost_cents < 0:
-                    raise PurchaseError("purchase cost cannot be negative")
+                if line.product_id not in allowed_product_ids:
+                    raise PurchaseError("product is not registered for this supplier")
                 product = conn.execute(
                     "SELECT * FROM products WHERE id=? AND is_deleted=0",
                     (line.product_id,),
@@ -93,7 +121,7 @@ class PurchaseService:
             )
             purchase_id = int(cursor.lastrowid)
             for line, (product, quantity, line_total) in zip(
-                lines, prepared, strict=True
+                normalized_lines, prepared, strict=True
             ):
                 conn.execute(
                     """INSERT INTO purchase_items(
@@ -199,6 +227,10 @@ class PurchaseService:
                     ).fetchone()
                     if product is not None:
                         old_stock = parse_quantity(product["stock_decimal"])
+                        if reverse > old_stock:
+                            raise PurchaseError(
+                                "cannot delete purchase because part of its stock has already been sold or adjusted"
+                            )
                         new_stock = old_stock - reverse
                         conn.execute(
                             "UPDATE products SET stock_decimal=?, updated_at=? WHERE id=?",

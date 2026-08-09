@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 
 def rm_to_cents(value: str | int | Decimal) -> int:

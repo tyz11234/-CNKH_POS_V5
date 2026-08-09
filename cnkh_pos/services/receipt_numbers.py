@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from datetime import date
 
+from cnkh_pos.services.document_numbers import configured_document_prefix
+
 
 def next_receipt_number(conn: sqlite3.Connection, business_date: date) -> str:
     day = business_date.isoformat()
@@ -21,4 +23,5 @@ def next_receipt_number(conn: sqlite3.Connection, business_date: date) -> str:
             "UPDATE receipt_sequences SET last_sequence = ? WHERE business_date = ?",
             (sequence, day),
         )
-    return f"CNKH{business_date:%Y%m%d}-{sequence:03d}"
+    prefix = configured_document_prefix(conn, "RECEIPT", "CNKH")
+    return f"{prefix}{business_date:%Y%m%d}-{sequence:03d}"

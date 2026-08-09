@@ -16,7 +16,14 @@ from PySide6.QtWidgets import (
 class Sidebar(QFrame):
     page_selected = Signal(str)
 
-    def __init__(self, items: list[tuple[str, str]], parent: QWidget | None = None):
+    def __init__(
+        self,
+        items: list[tuple[str, str]],
+        parent: QWidget | None = None,
+        *,
+        display_name: str = "Admin",
+        role_text: str = "管理员",
+    ):
         super().__init__(parent)
         self.setObjectName("Sidebar")
         self.setFixedWidth(188)
@@ -60,9 +67,9 @@ class Sidebar(QFrame):
         avatar = QLabel("●")
         avatar.setStyleSheet("color: white; font-size: 26px;")
         labels = QVBoxLayout()
-        name = QLabel("Admin")
+        name = QLabel(display_name)
         name.setStyleSheet("color: white; font-weight: 700;")
-        role = QLabel("● 管理员")
+        role = QLabel(f"● {role_text}")
         role.setStyleSheet("color: #52D273; font-size: 11px;")
         labels.addWidget(name)
         labels.addWidget(role)

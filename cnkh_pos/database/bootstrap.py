@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from cnkh_pos.config import SCHEMA_VERSION
 from cnkh_pos.database.connection import Database
 from cnkh_pos.database.migrations import MigrationManager
 from cnkh_pos.services.backup import BackupService
@@ -37,13 +38,21 @@ def bootstrap_database(database_path: Path, backup_dir: Path) -> StartupResult:
             + " | ".join(messages)
         )
 
+    schema_before = 0
     if not fresh:
+        conn = database.connect(readonly=True)
         try:
-            backup_path = (
-                BackupService(backup_dir)
-                .create(database_path, reason="pre_migration")
-                .path
-            )
+            schema_before = int(conn.execute("PRAGMA user_version").fetchone()[0])
+        finally:
+            conn.close()
+
+    if not fresh and schema_before < SCHEMA_VERSION:
+        try:
+            backup_service = BackupService(backup_dir)
+            backup_path = backup_service.create(
+                database_path, reason="pre_migration"
+            ).path
+            backup_service.prune(keep=30)
         except BaseException as exc:
             raise DatabaseStartupError(
                 "Could not create the required pre-migration backup. No migration was attempted."

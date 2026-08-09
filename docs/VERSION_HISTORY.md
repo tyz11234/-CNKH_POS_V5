@@ -1,5 +1,35 @@
 # Version History
 
+## 5.0.0-alpha.4 — 2026-08-10
+
+### New
+
+- Admin 可视化账号管理与 Staff 三项权限门禁。
+- 客户/供应商完整资料、安全删除和带付款方式/备注的收付款。
+- `supplier_products` 多对多供应商商品目录，进货 UI 与服务层双重过滤。
+- 商品真实分页、编辑、Excel 导入入口、分类管理和库存编辑 movement。
+- 销售退货页面、退款方式、Credit 欠款调整、挂单选择与收银员隔离。
+- 指定打印机/Windows 默认打印机选择、离线错误、80mm 测试输出。
+- 日期范围报表、精确折扣后毛利、开档现金与完整现金流日结。
+- Audit Log 密码保护清除、清除前备份与独立 `system_checks` 记录。
+- 收据、进货、退货和盘点单号前缀设置。
+- Admin/Staff 正常关闭自动备份及 30 份保留门禁。
+
+### Fixed
+
+- 供应商目录不再只靠 UI 过滤，服务层会拒绝不属于该供应商的商品。
+- 重复进货商品会合并数量，删除进货不会令库存变成负数。
+- 折扣销售退货按原行净额退款，最后一次退货消除四舍五入差额。
+- 报表不再因 sale items join 重复累计销售总额，毛利不再使用浮点数量。
+- 最新 schema 重启不会不断产生 `pre_migration` 备份。
+- 未选择打印机、默认打印机不存在、指定打印机被移除时会明确阻止打印。
+- 恢复挂单只保留非零折扣，并在验证 payload 后才标记为已恢复。
+
+### Migration
+
+- Database schema version: 7
+- 新增 `supplier_products`、`daily_cash_closings.opening_cash_cents`、`sale_returns.refund_method`。
+
 ## 5.0.0-alpha.3 — 2026-08-09
 
 ### Fixed

@@ -1,23 +1,24 @@
 from __future__ import annotations
 
-import os
 import html
+import os
 from decimal import Decimal
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QDoubleSpinBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
-    QDoubleSpinBox,
     QPushButton,
     QSplitter,
     QTableWidget,
@@ -26,28 +27,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from cnkh_pos.config import AppPaths
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
+from cnkh_pos.services.held_orders import HeldOrderService, cart_state_from_held_payload
 from cnkh_pos.services.money import format_myr
+from cnkh_pos.services.printing import PrintingService
 from cnkh_pos.services.product_search import search_products
 from cnkh_pos.services.sales import SaleLine, SalesService
-from cnkh_pos.services.held_orders import HeldOrderService, cart_state_from_held_payload
-from cnkh_pos.services.printing import PrintingService
-from cnkh_pos.config import AppPaths
 from cnkh_pos.ui.dialogs.checkout import CheckoutDialog, SaleCompletedDialog
 from cnkh_pos.ui.widgets import Card
-
-
-PRODUCTS = [
-    ("PVC Cable 1.5mm", "PVC1.5", "955501010001", "RM 2.10", "150", "roll"),
-    ("PVC Cable 2.5mm", "PVC2.5", "955501010002", "RM 2.80", "120", "roll"),
-    ("PVC Cable 4.0mm", "PVC4.0", "955501010003", "RM 4.60", "85", "roll"),
-    ("Hammer 2lb", "HAM2LB", "955501020001", "RM 15.90", "65", "pcs"),
-    ("Screwdriver Set 6pcs", "SDR6PCS", "955501030001", "RM 18.90", "40", "set"),
-    ("Pipe 20mm", "PIPE20", "955501040020", "RM 4.50", "80", "meter"),
-    ("Pipe 25mm", "PIPE25", "955501040025", "RM 6.20", "60", "meter"),
-    ("PVC Glue 500ml", "GLUE500", "955501050500", "RM 12.50", "35", "pcs"),
-]
 
 
 class StaffWindow(QMainWindow):
@@ -58,6 +47,8 @@ class StaffWindow(QMainWindow):
         self.cart_quantities: dict[int, Decimal] = {}
         self.cart_discounts: dict[int, int] = {}
         self.visible_product_ids: list[int] = []
+        self.product_offset = 0
+        self.product_page_size = 50
         self.setWindowTitle("CNKH POS Staff — V5.0")
         self.setMinimumSize(1120, 720)
         self.resize(1360, 850)
@@ -154,9 +145,7 @@ class StaffWindow(QMainWindow):
         self.category_filter.setObjectName("ProductCategoryFilter")
         self.category_filter.setMaximumWidth(145)
         self.category_filter.setMinimumWidth(105)
-        self.category_filter.currentRowChanged.connect(
-            lambda _row: self._load_product_table()
-        )
+        self.category_filter.currentRowChanged.connect(self._category_changed)
         product_body.addWidget(self.category_filter)
         self.products = QTableWidget(0, 6)
         self.products.setHorizontalHeaderLabels(
@@ -173,9 +162,18 @@ class StaffWindow(QMainWindow):
         self.products.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         product_body.addWidget(self.products, 1)
         layout.addLayout(product_body, 1)
-        pager = QLabel("共 58 项商品        1    2    3    4    5    …    8    ›")
-        pager.setObjectName("Muted")
-        layout.addWidget(pager)
+        pager = QHBoxLayout()
+        self.product_previous = QPushButton("‹ 上一页")
+        self.product_next = QPushButton("下一页 ›")
+        self.product_page_label = QLabel("第 1 页")
+        self.product_page_label.setObjectName("Muted")
+        self.product_previous.clicked.connect(self._previous_product_page)
+        self.product_next.clicked.connect(self._next_product_page)
+        pager.addStretch(1)
+        pager.addWidget(self.product_previous)
+        pager.addWidget(self.product_page_label)
+        pager.addWidget(self.product_next)
+        layout.addLayout(pager)
         return panel
 
     def _cart_panel(self) -> Card:
@@ -238,12 +236,17 @@ class StaffWindow(QMainWindow):
         discount.setObjectName("WarningButton")
         self.discount_button = discount
         discount.clicked.connect(self._edit_discount)
+        discount.setEnabled(bool(self.user.permissions.get("apply_discount", False)))
+        discount.setToolTip(
+            "需要管理员授予折扣权限" if not discount.isEnabled() else ""
+        )
         layout.addWidget(discount)
         self.hold_button.clicked.connect(self._hold_order)
         self.retrieve_button.clicked.connect(self._retrieve_order)
         reprint = QPushButton("重新打印上一张小票")
         self.reprint_button = reprint
         reprint.clicked.connect(self._reprint_latest)
+        reprint.setEnabled(bool(self.user.permissions.get("reprint_receipt", False)))
         layout.addWidget(reprint)
         checkout = QPushButton("结账   →")
         checkout.setObjectName("CheckoutButton")
@@ -396,13 +399,31 @@ class StaffWindow(QMainWindow):
         conn = self.database.connect(readonly=True)
         try:
             if category_id is None:
+                total_count = int(
+                    conn.execute(
+                        "SELECT COUNT(*) FROM products WHERE is_deleted=0"
+                    ).fetchone()[0]
+                )
                 rows = conn.execute(
-                    "SELECT id, name, COALESCE(sku,'') AS sku, selling_price_cents, stock_decimal, unit FROM products WHERE is_deleted=0 ORDER BY name COLLATE NOCASE LIMIT 100"
+                    """SELECT id,name,COALESCE(sku,'') AS sku,selling_price_cents,
+                              stock_decimal,unit FROM products WHERE is_deleted=0
+                       ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?""",
+                    (self.product_page_size, self.product_offset),
                 ).fetchall()
             else:
+                total_count = int(
+                    conn.execute(
+                        """SELECT COUNT(*) FROM products
+                           WHERE is_deleted=0 AND category_id=?""",
+                        (category_id,),
+                    ).fetchone()[0]
+                )
                 rows = conn.execute(
-                    "SELECT id, name, COALESCE(sku,'') AS sku, selling_price_cents, stock_decimal, unit FROM products WHERE is_deleted=0 AND category_id=? ORDER BY name COLLATE NOCASE LIMIT 100",
-                    (category_id,),
+                    """SELECT id,name,COALESCE(sku,'') AS sku,selling_price_cents,
+                              stock_decimal,unit FROM products
+                       WHERE is_deleted=0 AND category_id=?
+                       ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?""",
+                    (category_id, self.product_page_size, self.product_offset),
                 ).fetchall()
         finally:
             conn.close()
@@ -426,6 +447,23 @@ class StaffWindow(QMainWindow):
                 lambda checked=False, pid=product_id: self._add_to_cart(pid)
             )
             self.products.setCellWidget(row_index, 5, add)
+        page = self.product_offset // self.product_page_size + 1
+        pages = max(1, (total_count + self.product_page_size - 1) // self.product_page_size)
+        self.product_page_label.setText(f"共 {total_count} 项　　第 {page} / {pages} 页")
+        self.product_previous.setEnabled(self.product_offset > 0)
+        self.product_next.setEnabled(self.product_offset + len(rows) < total_count)
+
+    def _category_changed(self, _row: int) -> None:
+        self.product_offset = 0
+        self._load_product_table()
+
+    def _previous_product_page(self) -> None:
+        self.product_offset = max(0, self.product_offset - self.product_page_size)
+        self._load_product_table()
+
+    def _next_product_page(self) -> None:
+        self.product_offset += self.product_page_size
+        self._load_product_table()
 
     def _load_categories(self) -> None:
         self.category_filter.blockSignals(True)
@@ -613,7 +651,11 @@ class StaffWindow(QMainWindow):
             conn.close()
 
     def _open_quick_amount_settings(self) -> None:
+        if not self.user.permissions.get("manage_quick_amounts", False):
+            QMessageBox.information(self, "Settings", "此账号没有修改快捷金额的权限。")
+            return
         from PySide6.QtWidgets import QDialog, QVBoxLayout
+
         from cnkh_pos.ui.admin.settings_pages import QuickAmountsWidget
 
         dialog = QDialog(self)
@@ -645,10 +687,28 @@ class StaffWindow(QMainWindow):
         QMessageBox.information(self, "Hold Order", f"已挂单：{held.hold_no}")
 
     def _retrieve_order(self) -> None:
-        try:
-            held = HeldOrderService(self.database).retrieve_latest(
-                cashier_id=self.user.id
+        if self.cart_quantities and (
+            QMessageBox.question(
+                self, "Retrieve Order", "恢复挂单会替换当前购物车。继续？"
             )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        service = HeldOrderService(self.database)
+        try:
+            choices = service.list_held(cashier_id=self.user.id)
+            if not choices:
+                raise LookupError("no held order")
+            held = choices[0]
+            if len(choices) > 1:
+                labels = [item.hold_no for item in choices]
+                selected, ok = QInputDialog.getItem(
+                    self, "Retrieve Order", "选择挂单", labels, 0, False
+                )
+                if not ok:
+                    return
+                held = choices[labels.index(selected)]
+            held = service.retrieve(held.id, cashier_id=self.user.id)
         except Exception as exc:
             QMessageBox.warning(self, "Retrieve Order", str(exc))
             return
@@ -662,12 +722,29 @@ class StaffWindow(QMainWindow):
         receipt = service.receipt(sale_id)
         paths = AppPaths.default()
         paths.ensure_directories()
-        target = paths.exports / f"{receipt.receipt_no}.pdf"
+        target = paths.receipts / f"{receipt.receipt_no}.pdf"
         test_pdf = target if os.environ.get("CNKH_POS_TEST_PRINT_PDF") else None
-        service.print_receipt(receipt, output_pdf=test_pdf)
-        QMessageBox.information(self, "Receipt", "小票已发送到默认 80mm 打印机。")
+        try:
+            service.print_receipt(receipt, output_pdf=test_pdf)
+        except Exception as exc:
+            QMessageBox.warning(self, "Receipt", f"打印失败：{exc}")
+            return
+        printer_name = str(receipt.settings.get("printer_name", "")).strip()
+        destination = (
+            printer_name
+            if printer_name
+            else (
+                "Windows default printer"
+                if str(receipt.settings.get("printer_mode", "")).upper() == "DEFAULT"
+                else "PDF test output"
+            )
+        )
+        QMessageBox.information(self, "Receipt", f"小票已发送到：{destination}")
 
     def _reprint_latest(self) -> None:
+        if not self.user.permissions.get("reprint_receipt", False):
+            QMessageBox.information(self, "Reprint", "此账号没有重印权限。")
+            return
         try:
             receipt = PrintingService(self.database).latest_receipt()
             self._print_sale(receipt.sale_id)

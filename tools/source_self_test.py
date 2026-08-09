@@ -7,7 +7,6 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -33,6 +32,38 @@ def main() -> int:
     if missing:
         raise RuntimeError("Missing Qt resources: " + ", ".join(missing))
 
+    required = (
+        ROOT / "build" / "admin.spec",
+        ROOT / "build" / "staff.spec",
+        ROOT / "installer" / "CNKH_POS_V5.iss",
+        ROOT / ".github" / "workflows" / "windows-release.yml",
+        ROOT / "tools" / "windows_gui_acceptance.py",
+    )
+    missing_required = [str(path) for path in required if not path.is_file()]
+    if missing_required:
+        raise RuntimeError("Missing release files: " + ", ".join(missing_required))
+
+    version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+    for relative in (
+        "cnkh_pos/__init__.py",
+        "pyproject.toml",
+        "installer/CNKH_POS_V5.iss",
+    ):
+        if version not in (ROOT / relative).read_text(encoding="utf-8"):
+            raise RuntimeError(f"Version mismatch in {relative}: expected {version}")
+    workflow = (ROOT / ".github/workflows/windows-release.yml").read_text(
+        encoding="utf-8"
+    )
+    for marker in (
+        "QT_SCALE_FACTOR: \"1.0\"",
+        "QT_SCALE_FACTOR: \"1.25\"",
+        "QT_SCALE_FACTOR: \"1.5\"",
+        "Silent install and installed self-tests",
+        "SHA256SUMS.txt",
+    ):
+        if marker not in workflow:
+            raise RuntimeError(f"Windows release gate is missing: {marker}")
+
     from cnkh_pos.config import SCHEMA_VERSION
     from cnkh_pos.database.bootstrap import bootstrap_database
 
@@ -43,10 +74,19 @@ def main() -> int:
         try:
             assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
             assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+            assert conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='supplier_products'"
+            ).fetchone()
+            assert "opening_cash_cents" in {
+                row[1] for row in conn.execute("PRAGMA table_info(daily_cash_closings)")
+            }
+            assert "refund_method" in {
+                row[1] for row in conn.execute("PRAGMA table_info(sale_returns)")
+            }
         finally:
             conn.close()
     print(
-        f"SOURCE SELF-TEST PASSED: {len(python_files)} Python files, schema {SCHEMA_VERSION}"
+        f"SOURCE SELF-TEST PASSED: {len(python_files)} Python files, schema {SCHEMA_VERSION}, version {version}"
     )
     return 0
 

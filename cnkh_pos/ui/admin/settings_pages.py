@@ -4,10 +4,12 @@ import json
 import os
 from datetime import date, datetime
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QDate, Qt
 from PySide6.QtWidgets import (
-    QCheckBox,
+    QComboBox,
+    QDateEdit,
     QDialog,
+    QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -17,21 +19,31 @@ from PySide6.QtWidgets import (
     QListWidget,
     QMessageBox,
     QPushButton,
-    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTabWidget,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
+from cnkh_pos.config import AppPaths
 from cnkh_pos.database.connection import Database
 from cnkh_pos.database.migrations import utc_now_text
-from cnkh_pos.config import AppPaths
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.catalog import CategoryService
 from cnkh_pos.services.daily_closing import DailyClosingService
+from cnkh_pos.services.document_numbers import (
+    DEFAULT_DOCUMENT_PREFIXES,
+    document_prefixes,
+    save_document_prefixes,
+)
 from cnkh_pos.services.money import format_myr
+from cnkh_pos.services.printing import (
+    WINDOWS_DEFAULT_PRINTER,
+    resolve_printer_target,
+)
+from cnkh_pos.services.reports import ReportService
 
 
 class CategoryDialog(QDialog):
@@ -271,12 +283,14 @@ class ReceiptSettingsWidget(QWidget):
         self.phone = QLineEdit()
         self.footer = QTextEdit("Thank you / 谢谢光临")
         self.notes = QTextEdit()
+        self.printer = QComboBox()
         for label, widget in (
             ("Store Name", self.store),
             ("Address", self.address),
             ("Phone", self.phone),
             ("Footer", self.footer),
             ("Notes", self.notes),
+            ("Windows Printer", self.printer),
         ):
             form.addRow(label, widget)
             if hasattr(widget, "textChanged"):
@@ -290,6 +304,9 @@ class ReceiptSettingsWidget(QWidget):
         test.clicked.connect(self.test_print)
         self.test_button = test
         form.addRow(save, test)
+        refresh_printers = QPushButton("刷新打印机列表")
+        refresh_printers.clicked.connect(self.refresh_printers)
+        form.addRow("", refresh_printers)
         root.addLayout(form, 3)
         preview_box = QVBoxLayout()
         preview_box.addWidget(QLabel("80mm Receipt Live Preview"))
@@ -301,7 +318,59 @@ class ReceiptSettingsWidget(QWidget):
         )
         preview_box.addWidget(self.preview)
         root.addLayout(preview_box, 2)
+        self.refresh_printers()
+        self.load()
         self.update_preview()
+
+    def refresh_printers(self) -> None:
+        from PySide6.QtPrintSupport import QPrinterInfo
+
+        selected = self.printer.currentData() if self.printer.count() else None
+        self.printer.clear()
+        self.printer.addItem("Select a printer / 请选择打印机", None)
+        self.printer.addItem(
+            "Windows Default Printer / 系统默认", WINDOWS_DEFAULT_PRINTER
+        )
+        for name in QPrinterInfo.availablePrinterNames():
+            self.printer.addItem(name, name)
+        index = self.printer.findData(selected)
+        if index < 0 and selected not in (None, WINDOWS_DEFAULT_PRINTER):
+            self.printer.addItem(f"Unavailable / 已离线：{selected}", selected)
+            index = self.printer.count() - 1
+        self.printer.setCurrentIndex(max(0, index))
+
+    def load(self) -> None:
+        conn = self.database.connect(readonly=True)
+        try:
+            row = conn.execute(
+                "SELECT value_json FROM settings WHERE key='receipt'"
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return
+        try:
+            value = json.loads(row["value_json"])
+        except (TypeError, ValueError):
+            return
+        self.store.setText(str(value.get("store_name", "CNKH Hardware")))
+        self.address.setPlainText(str(value.get("address", "")))
+        self.phone.setText(str(value.get("phone", "")))
+        self.footer.setPlainText(str(value.get("footer", "Thank you / 谢谢光临")))
+        self.notes.setPlainText(str(value.get("notes", "")))
+        mode = str(value.get("printer_mode", "")).upper()
+        name = str(value.get("printer_name", "")).strip()
+        if mode == "DEFAULT":
+            target = WINDOWS_DEFAULT_PRINTER
+        elif mode == "NAMED" or (not mode and name):
+            target = name
+        else:
+            target = None
+        index = self.printer.findData(target)
+        if index < 0 and target not in (None, WINDOWS_DEFAULT_PRINTER):
+            self.printer.addItem(f"Unavailable / 已离线：{target}", target)
+            index = self.printer.count() - 1
+        self.printer.setCurrentIndex(max(0, index))
 
     def update_preview(self) -> None:
         self.preview.setPlainText(
@@ -312,23 +381,35 @@ class ReceiptSettingsWidget(QWidget):
         )
 
     def save(self) -> None:
+        selected = self.printer.currentData()
+        if selected is None:
+            QMessageBox.warning(
+                self,
+                "Receipt Settings",
+                "请选择 Windows 默认打印机或一台指定打印机。",
+            )
+            return
+        mode = "DEFAULT" if selected == WINDOWS_DEFAULT_PRINTER else "NAMED"
         value = {
             "store_name": self.store.text(),
             "address": self.address.toPlainText(),
             "phone": self.phone.text(),
             "footer": self.footer.toPlainText(),
             "notes": self.notes.toPlainText(),
+            "printer_mode": mode,
+            "printer_name": "" if mode == "DEFAULT" else str(selected),
         }
         with self.database.transaction() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO settings(key,value_json,updated_at,updated_by) VALUES ('receipt',?,?,?)",
                 (json.dumps(value, ensure_ascii=False), utc_now_text(), self.user.id),
             )
+        QMessageBox.information(self, "Receipt Settings", "收据与打印机设置已保存。")
 
     def test_print(self) -> None:
         from PySide6.QtCore import QSizeF
         from PySide6.QtGui import QPageSize, QTextDocument
-        from PySide6.QtPrintSupport import QPrinter
+        from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
 
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setPageSize(
@@ -342,14 +423,96 @@ class ReceiptSettingsWidget(QWidget):
             output_path = paths.exports / "receipt-settings-test.pdf"
             printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
             printer.setOutputFileName(str(output_path))
+        else:
+            available = set(QPrinterInfo.availablePrinterNames())
+            selected = self.printer.currentData()
+            settings = {
+                "printer_mode": (
+                    "DEFAULT"
+                    if selected == WINDOWS_DEFAULT_PRINTER
+                    else ("NAMED" if selected is not None else "UNCONFIGURED")
+                ),
+                "printer_name": (
+                    ""
+                    if selected in (None, WINDOWS_DEFAULT_PRINTER)
+                    else str(selected)
+                ),
+            }
+            try:
+                target = resolve_printer_target(
+                    settings,
+                    available_printers=available,
+                    default_printer_available=not QPrinterInfo.defaultPrinter().isNull(),
+                )
+            except RuntimeError as exc:
+                QMessageBox.warning(self, "Test Print", str(exc))
+                return
+            if target is not None:
+                printer.setPrinterName(target)
         document = QTextDocument()
         document.setPlainText(self.preview.toPlainText())
         document.print_(printer)
         QMessageBox.information(
             self,
             "Test Print",
-            f"测试小票已输出：{output_path}" if output_path else "测试小票已发送到默认打印机。",
+            f"测试小票已输出：{output_path}"
+            if output_path
+            else f"测试小票已发送到：{self.printer.currentText()}",
         )
+
+
+class DocumentPrefixesWidget(QWidget):
+    def __init__(self, database: Database, user: AuthenticatedUser):
+        super().__init__()
+        self.database = database
+        self.user = user
+        layout = QVBoxLayout(self)
+        layout.addWidget(
+            QLabel(
+                "单号前缀会用于之后新建立的收据、进货单、退货单和盘点单；旧单号不会改变。"
+            )
+        )
+        form = QFormLayout()
+        self.controls: dict[str, QLineEdit] = {}
+        labels = {
+            "RECEIPT": "Receipt / 收据",
+            "PURCHASE": "Purchase / 进货",
+            "RETURN": "Return / 退货",
+            "STOCKTAKE": "Stocktake / 盘点",
+        }
+        conn = database.connect(readonly=True)
+        try:
+            current = document_prefixes(conn)
+        finally:
+            conn.close()
+        for key, default in DEFAULT_DOCUMENT_PREFIXES.items():
+            control = QLineEdit(current.get(key, default))
+            control.setMaxLength(12)
+            control.setPlaceholderText(default)
+            self.controls[key] = control
+            form.addRow(labels[key], control)
+        layout.addLayout(form)
+        save = QPushButton("保存单号前缀")
+        save.setObjectName("SuccessButton")
+        save.clicked.connect(self.save)
+        self.save_button = save
+        layout.addWidget(save, alignment=Qt.AlignmentFlag.AlignLeft)
+        layout.addStretch(1)
+
+    def save(self) -> None:
+        try:
+            with self.database.transaction() as conn:
+                normalized = save_document_prefixes(
+                    conn,
+                    {key: control.text() for key, control in self.controls.items()},
+                    admin_id=self.user.id,
+                )
+        except Exception as exc:
+            QMessageBox.warning(self, "Document Prefixes", str(exc))
+            return
+        for key, value in normalized.items():
+            self.controls[key].setText(value)
+        QMessageBox.information(self, "Document Prefixes", "单号前缀已保存。")
 
 
 class SettingsPage(QWidget):
@@ -370,12 +533,15 @@ class SettingsPage(QWidget):
         tabs = QTabWidget()
         tabs.addTab(ReceiptSettingsWidget(database, user), "Receipt Settings")
         tabs.addTab(QuickAmountsWidget(database), "Quick Amount Settings")
+        tabs.addTab(DocumentPrefixesWidget(database, user), "Document Prefixes")
         general = QWidget()
-        form = QFormLayout(general)
-        form.addRow("UI Language", QLineEdit("中文 / English"))
-        form.addRow("Receipt Language", QLineEdit("English"))
-        form.addRow("Sale Success Sound", QCheckBox())
-        form.addRow("Windows Startup Auto Launch Staff POS", QCheckBox())
+        general_layout = QVBoxLayout(general)
+        general_layout.addWidget(QLabel("界面语言：中文 / English（固定双语）"))
+        general_layout.addWidget(
+            QLabel("Staff POS 开机自动启动可在安装器选项中启用或关闭。")
+        )
+        general_layout.addWidget(QLabel("数据库备份默认保留最近 30 份。"))
+        general_layout.addStretch(1)
         tabs.addTab(general, "General")
         root.addWidget(tabs)
 
@@ -391,13 +557,20 @@ class DailyClosingPage(QWidget):
         title.setObjectName("PageTitle")
         root.addWidget(title)
         form = QFormLayout()
+        self.opening = QDoubleSpinBox()
+        self.opening.setDecimals(2)
+        self.opening.setMaximum(99999999)
         self.system = QLineEdit("0.00")
         self.system.setReadOnly(True)
-        self.actual = QLineEdit("0.00")
+        self.actual = QDoubleSpinBox()
+        self.actual.setDecimals(2)
+        self.actual.setMaximum(99999999)
         self.variance = QLabel("RM 0.00")
         self.note = QTextEdit()
-        self.actual.textChanged.connect(self.update_variance)
-        form.addRow("System Cash", self.system)
+        self.opening.valueChanged.connect(self.load_system_cash)
+        self.actual.valueChanged.connect(self.update_variance)
+        form.addRow("Opening Cash / 开档现金", self.opening)
+        form.addRow("Expected Cash / 系统应有", self.system)
         form.addRow("Actual Cash", self.actual)
         form.addRow("Variance", self.variance)
         form.addRow("Notes", self.note)
@@ -411,7 +584,8 @@ class DailyClosingPage(QWidget):
 
     def load_system_cash(self) -> None:
         cents = DailyClosingService(self.database).system_cash(
-            business_date=date.today()
+            business_date=date.today(),
+            opening_cash_cents=round(self.opening.value() * 100),
         )
         self.system.setText(f"{cents / 100:.2f}")
         self.update_variance()
@@ -419,19 +593,23 @@ class DailyClosingPage(QWidget):
     def update_variance(self) -> None:
         try:
             system = round(float(self.system.text()) * 100)
-            actual = round(float(self.actual.text()) * 100)
+            actual = round(self.actual.value() * 100)
             self.variance.setText(format_myr(actual - system))
         except ValueError:
             self.variance.setText("—")
 
     def complete(self) -> None:
-        actual = round(float(self.actual.text()) * 100)
-        DailyClosingService(self.database).complete(
-            business_date=date.today(),
-            cashier_id=self.user.id,
-            actual_cash_cents=actual,
-            note=self.note.toPlainText(),
-        )
+        try:
+            DailyClosingService(self.database).complete(
+                business_date=date.today(),
+                cashier_id=self.user.id,
+                opening_cash_cents=round(self.opening.value() * 100),
+                actual_cash_cents=round(self.actual.value() * 100),
+                note=self.note.toPlainText(),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Daily Closing", str(exc))
+            return
         QMessageBox.information(self, "Daily Closing", "日结已保存。")
 
 
@@ -444,6 +622,24 @@ class ReportsPage(QWidget):
         title = QLabel("Reports / Monthly Summary")
         title.setObjectName("PageTitle")
         root.addWidget(title)
+        filters = QHBoxLayout()
+        self.start_date = QDateEdit()
+        self.start_date.setCalendarPopup(True)
+        today = QDate.currentDate()
+        self.start_date.setDate(QDate(today.year(), today.month(), 1))
+        self.end_date = QDateEdit()
+        self.end_date.setCalendarPopup(True)
+        self.end_date.setDate(today)
+        refresh = QPushButton("Refresh / 刷新")
+        refresh.setObjectName("PrimaryButton")
+        refresh.clicked.connect(self.refresh)
+        filters.addWidget(QLabel("From"))
+        filters.addWidget(self.start_date)
+        filters.addWidget(QLabel("To"))
+        filters.addWidget(self.end_date)
+        filters.addWidget(refresh)
+        filters.addStretch(1)
+        root.addLayout(filters)
         self.summary = QLabel()
         self.summary.setStyleSheet("font-size:17px; line-height:1.5;")
         root.addWidget(self.summary)
@@ -453,30 +649,47 @@ class ReportsPage(QWidget):
         self.export_button = export
         root.addWidget(export, alignment=Qt.AlignmentFlag.AlignLeft)
         root.addStretch(1)
-        conn = database.connect(readonly=True)
+        self.refresh()
+
+    def _date_range(self) -> tuple[str, str]:
+        start = self.start_date.date().toString("yyyy-MM-dd")
+        end = self.end_date.date().toString("yyyy-MM-dd")
+        if start > end:
+            raise ValueError("start date cannot be after end date")
+        return start, end
+
+    def refresh(self) -> None:
         try:
-            sales, profit, count = conn.execute(
-                "SELECT COALESCE(SUM(total_cents),0),COALESCE(SUM((si.unit_price_cents-si.unit_cost_cents_snapshot)*CAST(si.quantity_decimal AS REAL)),0),COUNT(DISTINCT s.id) FROM sales s LEFT JOIN sale_items si ON si.sale_id=s.id"
-            ).fetchone()
-            purchases = conn.execute(
-                "SELECT COALESCE(SUM(total_cents),0) FROM purchases"
-            ).fetchone()[0]
-            receivable = conn.execute(
-                "SELECT COALESCE(SUM(balance_cents),0) FROM customer_debts WHERE status='OPEN'"
-            ).fetchone()[0]
-            payable = conn.execute(
-                "SELECT COALESCE(SUM(total_cents-paid_cents),0) FROM purchases"
-            ).fetchone()[0]
-        finally:
-            conn.close()
+            start, end = self._date_range()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Reports", str(exc))
+            return
+        try:
+            result = ReportService(self.database).summary(
+                start_date=start, end_date=end
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Reports", str(exc))
+            return
         self.summary.setText(
-            f"Sales: {format_myr(int(sales))}\nGross Profit: {format_myr(int(profit))}\nTransaction Count: {count}\nPurchases: {format_myr(int(purchases))}\nCustomer Receivables: {format_myr(int(receivable))}\nSupplier Payables: {format_myr(int(payable))}"
+            f"Period: {start} to {end}\nSales: {format_myr(result.sales_cents)}\n"
+            f"Gross Profit after Discounts: {format_myr(result.gross_profit_cents)}\n"
+            f"Transaction Count: {result.transaction_count}\n"
+            f"Purchases: {format_myr(result.purchases_cents)}\n"
+            f"Current Customer Receivables: {format_myr(result.current_receivable_cents)}\n"
+            f"Current Supplier Payables: {format_myr(result.current_payable_cents)}"
         )
 
     def export_excel(self) -> None:
         from openpyxl import Workbook
         from openpyxl.styles import Font, PatternFill
 
+        try:
+            start, end = self._date_range()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Reports", str(exc))
+            return
+        self.refresh()
         paths = AppPaths.default()
         paths.ensure_directories()
         target = paths.exports / f"CNKH_POS_Report_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
@@ -503,29 +716,36 @@ class ReportsPage(QWidget):
                     """SELECT s.receipt_no,s.sold_at,s.total_cents,s.payment_method,
                               COALESCE(c.name,'Walk-In Customer')
                        FROM sales s LEFT JOIN customers c ON c.id=s.customer_id
-                       WHERE s.is_deleted=0 ORDER BY s.sold_at DESC""",
+                       WHERE s.is_deleted=0 AND substr(s.sold_at,1,10) BETWEEN ? AND ?
+                       ORDER BY s.sold_at DESC""",
+                    (start, end),
                 ),
                 (
                     "Purchases",
                     ["Purchase No", "Purchased At", "Total (sen)", "Paid (sen)", "Status"],
                     """SELECT purchase_no,purchased_at,total_cents,paid_cents,status
-                       FROM purchases WHERE is_deleted=0 ORDER BY purchased_at DESC""",
+                       FROM purchases WHERE is_deleted=0
+                       AND substr(purchased_at,1,10) BETWEEN ? AND ?
+                       ORDER BY purchased_at DESC""",
+                    (start, end),
                 ),
                 (
                     "Customer Debts",
                     ["Customer", "Original (sen)", "Balance (sen)", "Status", "Opened At"],
                     """SELECT c.name,d.original_cents,d.balance_cents,d.status,d.opened_at
                        FROM customer_debts d JOIN customers c ON c.id=d.customer_id
+                       WHERE substr(d.opened_at,1,10) BETWEEN ? AND ?
                        ORDER BY d.opened_at DESC""",
+                    (start, end),
                 ),
             )
-            for name, headers, query in datasets:
+            for name, headers, query, params in datasets:
                 sheet = workbook.create_sheet(name)
                 sheet.append(headers)
                 for cell in sheet[1]:
                     cell.font = Font(bold=True, color="FFFFFF")
                     cell.fill = PatternFill("solid", fgColor="1769E0")
-                for row in conn.execute(query):
+                for row in conn.execute(query, params):
                     sheet.append(list(row))
                 sheet.freeze_panes = "A2"
                 sheet.auto_filter.ref = sheet.dimensions

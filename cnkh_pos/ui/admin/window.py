@@ -8,10 +8,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cnkh_pos.ui.admin.dashboard import DashboardPage
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
-from cnkh_pos.ui.widgets import Sidebar
+from cnkh_pos.ui.admin.dashboard import DashboardPage
 from cnkh_pos.ui.admin.data_pages import (
     AuditPage,
     EntityPage,
@@ -22,6 +21,8 @@ from cnkh_pos.ui.admin.data_pages import (
     StocktakePage,
 )
 from cnkh_pos.ui.admin.settings_pages import DailyClosingPage, ReportsPage, SettingsPage
+from cnkh_pos.ui.admin.users_page import UsersPage
+from cnkh_pos.ui.widgets import Sidebar
 
 
 class AdminWindow(QMainWindow):
@@ -46,10 +47,13 @@ class AdminWindow(QMainWindow):
                 ("purchases", "◇  进货"),
                 ("customers", "○  客户"),
                 ("suppliers", "○  供应商"),
+                ("users", "♙  员工账号"),
                 ("reports", "▥  报表"),
                 ("settings", "⚙  设置"),
                 ("maintenance", "▦  数据维护"),
-            ]
+            ],
+            display_name=user.display_name,
+            role_text="管理员",
         )
         self.pages = QStackedWidget()
         self.page_keys: dict[str, int] = {}
@@ -58,10 +62,11 @@ class AdminWindow(QMainWindow):
         catalog_tabs.addTab(ProductsPage(database, user), "Products / 商品")
         catalog_tabs.addTab(StocktakePage(database, user), "Stocktake / 盘点")
         self._add_page("products", catalog_tabs)
-        self._add_page("sales", SalesPage(database))
+        self._add_page("sales", SalesPage(database, user))
         self._add_page("purchases", PurchasesPage(database, user))
         self._add_page("customers", EntityPage(database, user, "customers"))
         self._add_page("suppliers", EntityPage(database, user, "suppliers"))
+        self._add_page("users", UsersPage(database, user))
         report_tabs = QTabWidget()
         report_tabs.addTab(ReportsPage(database), "Reports")
         report_tabs.addTab(DailyClosingPage(database, user), "Daily Cash Closing")
@@ -69,7 +74,7 @@ class AdminWindow(QMainWindow):
         self._add_page("settings", SettingsPage(database, user))
         maintenance_tabs = QTabWidget()
         maintenance_tabs.addTab(MaintenancePage(database, user), "Data Maintenance")
-        maintenance_tabs.addTab(AuditPage(database), "Audit Log")
+        maintenance_tabs.addTab(AuditPage(database, user), "Audit Log")
         self._add_page("maintenance", maintenance_tabs)
         sidebar.page_selected.connect(self._select_page)
         layout.addWidget(sidebar)

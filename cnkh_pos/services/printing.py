@@ -10,6 +10,34 @@ from reportlab.pdfgen.canvas import Canvas
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.money import format_myr
 
+WINDOWS_DEFAULT_PRINTER = "__WINDOWS_DEFAULT__"
+
+
+def resolve_printer_target(
+    settings: dict[str, object],
+    *,
+    available_printers: set[str],
+    default_printer_available: bool,
+) -> str | None:
+    """Return a named printer or None for an explicitly selected Windows default."""
+    mode = str(settings.get("printer_mode", "")).strip().upper()
+    configured = str(settings.get("printer_name", "")).strip()
+    if not mode and configured:
+        mode = "NAMED"  # Backward-compatible with an older saved named printer.
+    if mode == "DEFAULT":
+        if not default_printer_available:
+            raise RuntimeError("Windows has no default printer")
+        return None
+    if mode == "NAMED":
+        if not configured:
+            raise RuntimeError("no printer has been selected")
+        if configured not in available_printers:
+            raise RuntimeError(f"configured printer is unavailable: {configured}")
+        return configured
+    raise RuntimeError(
+        "no printer has been selected; choose Windows default or a named printer in Admin Settings"
+    )
+
 
 @dataclass(frozen=True, slots=True)
 class Receipt:
@@ -72,6 +100,8 @@ class PrintingService:
                     "phone": "",
                     "footer": "Thank you / 谢谢光临",
                     "notes": "",
+                    "printer_name": "",
+                    "printer_mode": "UNCONFIGURED",
                 }
             )
             return Receipt(
@@ -110,9 +140,15 @@ class PrintingService:
             qty = item["quantity_decimal"]
             detail = f"  {qty} {item['unit_snapshot']} x {format_myr(int(item['unit_price_cents']))}"
             lines.append(f"{detail:<30}{format_myr(int(item['subtotal_cents'])):>12}")
+            if int(item["discount_cents"]):
+                lines.append(
+                    f"  Discount / 折扣{format_myr(-int(item['discount_cents'])):>25}"
+                )
         lines.extend(
             [
                 "-" * width,
+                f"SUBTOTAL{format_myr(receipt.subtotal_cents):>34}",
+                f"DISCOUNT{format_myr(-receipt.discount_cents):>34}",
                 f"TOTAL{format_myr(receipt.total_cents):>37}",
                 f"PAID{format_myr(receipt.paid_cents):>38}",
                 f"CHANGE{format_myr(receipt.change_cents):>36}",
@@ -143,7 +179,7 @@ class PrintingService:
         """Print through Qt. Tests can select PDF output without requiring hardware."""
         from PySide6.QtCore import QSizeF
         from PySide6.QtGui import QPageSize, QTextDocument
-        from PySide6.QtPrintSupport import QPrinter
+        from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
 
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setPageSize(
@@ -152,6 +188,15 @@ class PrintingService:
         if output_pdf is not None:
             printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
             printer.setOutputFileName(str(output_pdf))
+        else:
+            available = set(QPrinterInfo.availablePrinterNames())
+            target = resolve_printer_target(
+                receipt.settings,
+                available_printers=available,
+                default_printer_available=not QPrinterInfo.defaultPrinter().isNull(),
+            )
+            if target is not None:
+                printer.setPrinterName(target)
         document = QTextDocument()
         escaped = (
             self.render_text(receipt)

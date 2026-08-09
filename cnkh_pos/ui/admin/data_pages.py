@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -21,21 +23,26 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from cnkh_pos.config import APP_VERSION, AppPaths
 from cnkh_pos.database.connection import Database
-from cnkh_pos.database.migrations import utc_now_text
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.backup import BackupService
 from cnkh_pos.services.catalog import CatalogService, ProductInput
+from cnkh_pos.services.entities import EntityInput, EntityService
+from cnkh_pos.services.excel_import import ExcelImportService
+from cnkh_pos.services.maintenance import AuditMaintenanceService
 from cnkh_pos.services.money import rm_to_cents
-from cnkh_pos.services.restore import RestoreService
-from cnkh_pos.services.stocktake import StocktakeService
-from cnkh_pos.services.purchases import PurchaseLine, PurchaseService
 from cnkh_pos.services.payments import CustomerPaymentService, SupplierPaymentService
+from cnkh_pos.services.printing import PrintingService
+from cnkh_pos.services.purchases import PurchaseLine, PurchaseService
+from cnkh_pos.services.restore import RestoreService
+from cnkh_pos.services.sales import ReturnService
+from cnkh_pos.services.stocktake import StocktakeService
 
 
 class PagedTablePage(QWidget):
@@ -113,14 +120,32 @@ class PagedTablePage(QWidget):
 
 
 class ProductDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        database: Database,
+        parent=None,
+        *,
+        product_id: int | None = None,
+    ):
         super().__init__(parent)
-        self.setWindowTitle("新增商品")
+        self.database = database
+        self.product_id = product_id
+        self.setWindowTitle("编辑商品" if product_id is not None else "新增商品")
         self.setMinimumWidth(520)
         layout = QVBoxLayout(self)
         form = QFormLayout()
         self.name = QLineEdit()
         self.aliases = QLineEdit()
+        self.category = QComboBox()
+        self.category.addItem("未分类 / Uncategorized", None)
+        conn = database.connect(readonly=True)
+        try:
+            for row in conn.execute(
+                "SELECT id,name FROM categories WHERE is_deleted=0 ORDER BY name COLLATE NOCASE"
+            ):
+                self.category.addItem(str(row["name"]), int(row["id"]))
+        finally:
+            conn.close()
         self.sku = QLineEdit()
         self.barcode = QLineEdit()
         self.cost = QLineEdit("0.00")
@@ -132,6 +157,7 @@ class ProductDialog(QDialog):
         for label, widget in (
             ("Name *", self.name),
             ("Aliases", self.aliases),
+            ("Category", self.category),
             ("SKU", self.sku),
             ("Barcode (blank = EAN-13)", self.barcode),
             ("Cost RM", self.cost),
@@ -150,11 +176,37 @@ class ProductDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        if product_id is not None:
+            self._load_product(product_id)
+
+    def _load_product(self, product_id: int) -> None:
+        conn = self.database.connect(readonly=True)
+        try:
+            row = conn.execute(
+                "SELECT * FROM products WHERE id=? AND is_deleted=0", (product_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise LookupError("product not found")
+        self.name.setText(str(row["name"]))
+        self.aliases.setText(str(row["aliases"]))
+        self.sku.setText(str(row["sku"] or ""))
+        self.barcode.setText(str(row["barcode"] or ""))
+        self.cost.setText(f"{int(row['cost_cents']) / 100:.2f}")
+        self.price.setText(f"{int(row['selling_price_cents']) / 100:.2f}")
+        self.stock.setText(str(row["stock_decimal"]))
+        self.unit.setText(str(row["unit"]))
+        self.location.setText(str(row["location"]))
+        self.low_stock.setText(str(row["low_stock_decimal"]))
+        index = self.category.findData(row["category_id"])
+        self.category.setCurrentIndex(max(0, index))
 
     def value(self) -> ProductInput:
         return ProductInput(
             name=self.name.text(),
             aliases=self.aliases.text(),
+            category_id=self.category.currentData(),
             sku=self.sku.text() or None,
             barcode=self.barcode.text() or None,
             cost_cents=rm_to_cents(self.cost.text()),
@@ -175,6 +227,9 @@ class ProductsPage(PagedTablePage):
         )
         self.user = user
         self.add_action("＋ 新增", self.add_product, style="PrimaryButton")
+        self.add_action("编辑", self.edit_product, style="WarningButton")
+        self.add_action("Excel 模板", self.export_template)
+        self.add_action("Excel 导入", self.import_excel, style="SuccessButton")
         self.add_action("复制 Barcode", self.copy_barcode)
         self.add_action("批量删除", self.delete_selected, style="DangerButton")
         self.add_action("刷新", self.refresh)
@@ -194,7 +249,7 @@ class ProductsPage(PagedTablePage):
             conn.close()
 
     def add_product(self) -> None:
-        dialog = ProductDialog(self)
+        dialog = ProductDialog(self.database, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         try:
@@ -204,6 +259,80 @@ class ProductsPage(PagedTablePage):
             self.refresh()
         except Exception as exc:
             QMessageBox.warning(self, "Product", str(exc))
+
+    def edit_product(self) -> None:
+        product_id = self.selected_id()
+        if product_id is None:
+            QMessageBox.information(self, "Product", "请先选择商品。")
+            return
+        try:
+            dialog = ProductDialog(self.database, self, product_id=product_id)
+        except Exception as exc:
+            QMessageBox.warning(self, "Product", str(exc))
+            return
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            CatalogService(self.database).update_product(
+                product_id, dialog.value(), admin_id=self.user.id
+            )
+            self.refresh()
+        except Exception as exc:
+            QMessageBox.warning(self, "Product", str(exc))
+
+    def export_template(self) -> None:
+        paths = AppPaths.default()
+        paths.ensure_directories()
+        target, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Product Excel Template",
+            str(paths.exports / "CNKH_POS_Product_Import_Template.xlsx"),
+            "Excel Workbook (*.xlsx)",
+            options=QFileDialog.Option.DontUseNativeDialog,
+        )
+        if not target:
+            return
+        try:
+            result = ExcelImportService.create_template(Path(target))
+            QMessageBox.information(self, "Excel Template", f"模板已建立：{result}")
+        except Exception as exc:
+            QMessageBox.warning(self, "Excel Template", str(exc))
+
+    def import_excel(self) -> None:
+        source, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Products from Excel",
+            "",
+            "Excel Workbook (*.xlsx)",
+            options=QFileDialog.Option.DontUseNativeDialog,
+        )
+        if not source:
+            return
+        service = ExcelImportService(self.database)
+        try:
+            rows = service.preview(Path(source))
+        except Exception as exc:
+            QMessageBox.warning(self, "Excel Import", str(exc))
+            return
+        valid = [row for row in rows if not row.errors]
+        invalid = [row for row in rows if row.errors]
+        details = "\n".join(
+            f"Row {row.row_number}: {', '.join(row.errors)}" for row in invalid[:12]
+        )
+        prompt = (
+            f"可导入：{len(valid)} 行\n有错误：{len(invalid)} 行"
+            + (f"\n\n{details}" if details else "")
+            + "\n\n只会导入没有错误的行。继续？"
+        )
+        if QMessageBox.question(self, "Excel Import Preview", prompt) != QMessageBox.StandardButton.Yes:
+            return
+        summary = service.commit(rows, admin_id=self.user.id)
+        self.refresh()
+        QMessageBox.information(
+            self,
+            "Excel Import",
+            f"成功：{summary.success}，跳过：{summary.skipped}，预览错误：{summary.errors}",
+        )
 
     def copy_barcode(self) -> None:
         row = self.table.currentRow()
@@ -230,13 +359,101 @@ class ProductsPage(PagedTablePage):
         self.refresh()
 
 
+class ReturnSaleDialog(QDialog):
+    def __init__(self, database: Database, sale_id: int, parent=None):
+        super().__init__(parent)
+        self.database = database
+        self.sale_id = sale_id
+        self.setWindowTitle("Sales Return / 销售退货")
+        self.setMinimumSize(820, 540)
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel("输入本次退货数量；退款会按原折扣后的实付金额计算。"))
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(
+            ["Item ID", "商品", "已售", "已退", "可退", "本次退货"]
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        root.addWidget(self.table)
+        self.reason = QLineEdit()
+        root.addWidget(QLabel("Reason / 退货原因"))
+        root.addWidget(self.reason)
+        self.refund_method = QComboBox()
+        self.refund_method.addItem("Original Method / 原付款方式", "ORIGINAL")
+        self.refund_method.addItem("Cash / 现金", "CASH")
+        self.refund_method.addItem("Card / 卡", "CARD")
+        self.refund_method.addItem("DuitNow QR", "DUITNOW_QR")
+        root.addWidget(QLabel("Refund Method / 退款方式"))
+        root.addWidget(self.refund_method)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+        self._load()
+
+    def _load(self) -> None:
+        conn = self.database.connect(readonly=True)
+        try:
+            rows = conn.execute(
+                """SELECT si.id,si.product_name_snapshot,si.quantity_decimal,
+                          COALESCE(SUM(CAST(sri.quantity_decimal AS REAL)),0) returned
+                   FROM sale_items si
+                   LEFT JOIN sale_return_items sri ON sri.sale_item_id=si.id
+                   WHERE si.sale_id=? GROUP BY si.id ORDER BY si.id""",
+                (self.sale_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+        self.table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            sold = Decimal(str(row["quantity_decimal"]))
+            returned = Decimal(str(row["returned"]))
+            remaining = max(Decimal("0"), sold - returned)
+            values = (row["id"], row["product_name_snapshot"], sold, returned, remaining)
+            for column, value in enumerate(values):
+                self.table.setItem(row_index, column, QTableWidgetItem(str(value)))
+            quantity = QDoubleSpinBox()
+            quantity.setDecimals(3)
+            quantity.setRange(0, float(remaining))
+            self.table.setCellWidget(row_index, 5, quantity)
+
+    def _validate(self) -> None:
+        if not self.reason.text().strip():
+            QMessageBox.warning(self, "Return", "请填写退货原因。")
+            return
+        if not self.value()[0]:
+            QMessageBox.warning(self, "Return", "请至少输入一项退货数量。")
+            return
+        self.accept()
+
+    def value(self) -> tuple[dict[int, Decimal], str, str]:
+        result: dict[int, Decimal] = {}
+        for row in range(self.table.rowCount()):
+            control = self.table.cellWidget(row, 5)
+            quantity = Decimal(str(control.value()))
+            if quantity > 0:
+                result[int(self.table.item(row, 0).text())] = quantity
+        return (
+            result,
+            self.reason.text().strip(),
+            str(self.refund_method.currentData()),
+        )
+
+
 class SalesPage(PagedTablePage):
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, user: AuthenticatedUser):
         super().__init__(
             database,
             "销售记录",
             ["ID", "Receipt No", "时间", "总额", "付款方式", "状态"],
         )
+        self.user = user
+        self.add_action("销售退货", self.return_sale, style="WarningButton")
+        self.add_action("重印小票", self.reprint, style="PrimaryButton")
         self.add_action("刷新", self.refresh, style="PrimaryButton")
         self.refresh()
 
@@ -250,6 +467,76 @@ class SalesPage(PagedTablePage):
             self.set_rows([tuple(row) for row in rows])
         finally:
             conn.close()
+
+    def return_sale(self) -> None:
+        sale_id = self.selected_id()
+        if sale_id is None:
+            QMessageBox.information(self, "Return", "请先选择销售记录。")
+            return
+        dialog = ReturnSaleDialog(self.database, sale_id, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        quantities, reason, refund_method = dialog.value()
+        try:
+            number = ReturnService(self.database).create_return(
+                sale_id=sale_id,
+                quantities_by_sale_item=quantities,
+                reason=reason,
+                operator_id=self.user.id,
+                refund_method=refund_method,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Return", str(exc))
+            return
+        QMessageBox.information(self, "Return", f"退货已保存：{number}")
+
+    def reprint(self) -> None:
+        sale_id = self.selected_id()
+        if sale_id is None:
+            QMessageBox.information(self, "Receipt", "请先选择销售记录。")
+            return
+        try:
+            service = PrintingService(self.database)
+            receipt = service.receipt(sale_id)
+            service.print_receipt(receipt)
+        except Exception as exc:
+            QMessageBox.warning(self, "Receipt", str(exc))
+            return
+        QMessageBox.information(self, "Receipt", "小票已发送到所选打印机。")
+
+
+class RecordPaymentDialog(QDialog):
+    def __init__(self, *, title: str, balance_cents: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setMinimumWidth(480)
+        layout = QFormLayout(self)
+        self.amount = QDoubleSpinBox()
+        self.amount.setDecimals(2)
+        self.amount.setRange(0.01, balance_cents / 100)
+        self.amount.setValue(balance_cents / 100)
+        self.method = QComboBox()
+        self.method.addItems(["CASH", "CARD", "DUITNOW_QR"])
+        self.note = QTextEdit()
+        self.note.setPlaceholderText("Optional payment note / 付款备注")
+        self.note.setMaximumHeight(100)
+        layout.addRow("Amount RM", self.amount)
+        layout.addRow("Payment Method", self.method)
+        layout.addRow("Note / 备注", self.note)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def value(self) -> tuple[int, str, str]:
+        return (
+            round(self.amount.value() * 100),
+            self.method.currentText(),
+            self.note.toPlainText().strip(),
+        )
 
 
 class NewPurchaseDialog(QDialog):
@@ -266,18 +553,11 @@ class NewPurchaseDialog(QDialog):
             suppliers = conn.execute(
                 "SELECT id,name FROM suppliers WHERE is_deleted=0 ORDER BY name"
             ).fetchall()
-            products = conn.execute(
-                "SELECT id,name,cost_cents FROM products WHERE is_deleted=0 ORDER BY name"
-            ).fetchall()
         finally:
             conn.close()
         for row in suppliers:
             self.supplier.addItem(str(row["name"]), int(row["id"]))
         self.product = QComboBox()
-        for row in products:
-            self.product.addItem(
-                str(row["name"]), (int(row["id"]), int(row["cost_cents"]))
-            )
         self.quantity = QDoubleSpinBox()
         self.quantity.setDecimals(3)
         self.quantity.setRange(0.001, 999999)
@@ -318,7 +598,43 @@ class NewPurchaseDialog(QDialog):
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         root.addWidget(buttons)
+        self.product_note = QLabel()
+        root.insertWidget(0, self.product_note)
+        self.supplier.currentIndexChanged.connect(self._supplier_changed)
+        self._load_supplier_products()
+
+    def _supplier_changed(self, _index: int) -> None:
+        self.items.setRowCount(0)
+        self._load_supplier_products()
+
+    def _load_supplier_products(self) -> None:
+        self.product.clear()
+        supplier_id = self.supplier.currentData()
+        if supplier_id is not None:
+            conn = self.database.connect(readonly=True)
+            try:
+                rows = conn.execute(
+                    """SELECT p.id,p.name,p.cost_cents FROM supplier_products sp
+                       JOIN products p ON p.id=sp.product_id
+                       WHERE sp.supplier_id=? AND sp.is_active=1 AND p.is_deleted=0
+                       ORDER BY p.name COLLATE NOCASE""",
+                    (supplier_id,),
+                ).fetchall()
+            finally:
+                conn.close()
+            for row in rows:
+                self.product.addItem(
+                    str(row["name"]), (int(row["id"]), int(row["cost_cents"]))
+                )
+        available = self.supplier.count() > 0 and self.product.count() > 0
+        self.save_button.setEnabled(available)
+        self.product_note.setText(
+            ""
+            if available
+            else "请先在供应商页面建立供应商，并为该供应商登记供货商品。"
+        )
         self._product_changed()
 
     def _product_changed(self) -> None:
@@ -330,6 +646,13 @@ class NewPurchaseDialog(QDialog):
         if self.product.currentIndex() < 0:
             return
         product_id, _ = self.product.currentData()
+        for existing_row in range(self.items.rowCount()):
+            if int(self.items.item(existing_row, 0).text()) == int(product_id):
+                current = Decimal(self.items.item(existing_row, 2).text())
+                updated = current + Decimal(str(self.quantity.value()))
+                self.items.item(existing_row, 2).setText(str(updated))
+                self.items.item(existing_row, 3).setText(f"{self.cost.value():.2f}")
+                return
         row = self.items.rowCount()
         self.items.insertRow(row)
         for col, value in enumerate(
@@ -343,6 +666,10 @@ class NewPurchaseDialog(QDialog):
             self.items.setItem(row, col, QTableWidgetItem(str(value)))
 
     def value(self) -> tuple[int, list[PurchaseLine], int, str]:
+        if self.supplier.currentData() is None:
+            raise ValueError("supplier is required")
+        if self.items.rowCount() == 0:
+            raise ValueError("purchase has no items")
         lines = [
             PurchaseLine(
                 int(self.items.item(row, 0).text()),
@@ -369,6 +696,7 @@ class PurchasesPage(PagedTablePage):
         )
         self.add_action("＋ 新建进货", self.new_purchase, style="PrimaryButton")
         self.add_action("记录供应商付款", self.supplier_payment, style="SuccessButton")
+        self.add_action("删除进货", self.delete_purchase, style="DangerButton")
         self.add_action("刷新", self.refresh)
         self.refresh()
 
@@ -390,8 +718,8 @@ class PurchasesPage(PagedTablePage):
         dialog = NewPurchaseDialog(self.database, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        supplier_id, lines, paid, method = dialog.value()
         try:
+            supplier_id, lines, paid, method = dialog.value()
             PurchaseService(self.database).create_purchase(
                 supplier_id=supplier_id,
                 lines=lines,
@@ -403,27 +731,59 @@ class PurchasesPage(PagedTablePage):
         except Exception as exc:
             QMessageBox.warning(self, "Purchase", str(exc))
 
+    def delete_purchase(self) -> None:
+        purchase_id = self.selected_id()
+        if purchase_id is None:
+            QMessageBox.information(self, "Purchase", "请先选择进货记录。")
+            return
+        if (
+            QMessageBox.question(
+                self,
+                "Delete Purchase",
+                "删除会反向扣减该进货加入的库存，并保留审计记录。确认继续？",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        try:
+            PurchaseService(self.database).delete_purchase(
+                purchase_id=purchase_id, admin_id=self.user.id
+            )
+            self.refresh()
+        except Exception as exc:
+            QMessageBox.warning(self, "Delete Purchase", str(exc))
+
     def supplier_payment(self) -> None:
         purchase_id = self.selected_id()
         if purchase_id is None:
             QMessageBox.information(self, "Payment", "请先选择进货记录。")
             return
-        amount, ok = QInputDialog.getDouble(
-            self, "Supplier Payment", "Amount RM", 0, 0.01, 99999999, 2
-        )
-        if not ok:
+        conn = self.database.connect(readonly=True)
+        try:
+            row = conn.execute(
+                """SELECT total_cents-paid_cents balance_cents FROM purchases
+                   WHERE id=? AND is_deleted=0""",
+                (purchase_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None or int(row["balance_cents"]) <= 0:
+            QMessageBox.information(self, "Payment", "这张进货单没有未结余额。")
             return
-        method, ok = QInputDialog.getItem(
-            self, "Payment Method", "Method", ["CASH", "CARD", "DUITNOW_QR"], 0, False
+        dialog = RecordPaymentDialog(
+            title="Supplier Payment / 供应商付款",
+            balance_cents=int(row["balance_cents"]),
+            parent=self,
         )
-        if not ok:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        amount_cents, method, note = dialog.value()
         try:
             SupplierPaymentService(self.database).record_payment(
                 purchase_id=purchase_id,
-                amount_cents=round(amount * 100),
+                amount_cents=amount_cents,
                 payment_method=method,
-                note="Admin payment dialog",
+                note=note,
                 operator_id=self.user.id,
             )
             self.refresh()
@@ -431,19 +791,133 @@ class PurchasesPage(PagedTablePage):
             QMessageBox.warning(self, "Supplier Payment", str(exc))
 
 
+class EntityDialog(QDialog):
+    def __init__(self, entity: str, parent=None, *, row=None):
+        super().__init__(parent)
+        self.entity = entity
+        self.setWindowTitle(
+            ("Edit" if row is not None else "Add")
+            + (" Customer / 客户" if entity == "customers" else " Supplier / 供应商")
+        )
+        self.setMinimumWidth(520)
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        self.name = QLineEdit()
+        self.phone = QLineEdit()
+        self.email = QLineEdit()
+        self.notes = QTextEdit()
+        form.addRow("Name *", self.name)
+        form.addRow("Phone / 手机号", self.phone)
+        if entity == "suppliers":
+            form.addRow("Email", self.email)
+        form.addRow("Notes / 备注", self.notes)
+        layout.addLayout(form)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        if row is not None:
+            self.name.setText(str(row["name"]))
+            self.phone.setText(str(row["phone"] or ""))
+            if entity == "suppliers":
+                self.email.setText(str(row["email"] or ""))
+            self.notes.setPlainText(str(row["notes"] or ""))
+
+    def _validate(self) -> None:
+        if not self.name.text().strip():
+            QMessageBox.warning(self, "Record", "Name is required.")
+            return
+        self.accept()
+
+    def value(self) -> EntityInput:
+        return EntityInput(
+            name=self.name.text(),
+            phone=self.phone.text(),
+            email=self.email.text(),
+            notes=self.notes.toPlainText(),
+        )
+
+
+class SupplierProductsDialog(QDialog):
+    def __init__(
+        self,
+        database: Database,
+        supplier_id: int,
+        supplier_name: str,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.database = database
+        self.supplier_id = supplier_id
+        self.setWindowTitle(f"Supplier Products / {supplier_name}")
+        self.setMinimumSize(760, 580)
+        root = QVBoxLayout(self)
+        root.addWidget(QLabel("勾选此供应商实际供应的商品。一个商品可以属于多个供应商。"))
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["ID", "商品", "SKU", "供应"])
+        self.table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        root.addWidget(self.table)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+        self._load()
+
+    def _load(self) -> None:
+        selected = EntityService(
+            self.database, "suppliers"
+        ).supplier_product_ids(self.supplier_id)
+        conn = self.database.connect(readonly=True)
+        try:
+            rows = conn.execute(
+                """SELECT id,name,COALESCE(sku,'') sku FROM products
+                   WHERE is_deleted=0 ORDER BY name COLLATE NOCASE"""
+            ).fetchall()
+        finally:
+            conn.close()
+        self.table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            self.table.setItem(row_index, 0, QTableWidgetItem(str(row["id"])))
+            self.table.setItem(row_index, 1, QTableWidgetItem(str(row["name"])))
+            self.table.setItem(row_index, 2, QTableWidgetItem(str(row["sku"])))
+            check = QCheckBox()
+            check.setChecked(int(row["id"]) in selected)
+            self.table.setCellWidget(row_index, 3, check)
+
+    def selected_product_ids(self) -> set[int]:
+        return {
+            int(self.table.item(row, 0).text())
+            for row in range(self.table.rowCount())
+            if self.table.cellWidget(row, 3).isChecked()
+        }
+
+
 class EntityPage(PagedTablePage):
     def __init__(self, database: Database, user: AuthenticatedUser, entity: str):
         self.entity = entity
         self.user = user
         title = "客户与欠账" if entity == "customers" else "供应商与付款"
-        columns = ["ID", "Name", "Phone", "Email / Notes", "Balance"]
+        columns = ["ID", "Name", "Phone", "Email", "Notes", "Balance"]
         super().__init__(database, title, columns)
         self.add_action("＋ 新增", self.add_entity, style="PrimaryButton")
+        self.add_action("编辑", self.edit_entity, style="WarningButton")
+        if entity == "suppliers":
+            self.add_action("供货商品", self.manage_supplier_products, style="PrimaryButton")
         self.add_action(
             "记录还款" if entity == "customers" else "记录付款",
             self.payment,
             style="SuccessButton",
         )
+        self.add_action("删除", self.delete_entity, style="DangerButton")
         self.add_action("刷新", self.refresh)
         self.refresh()
 
@@ -452,14 +926,16 @@ class EntityPage(PagedTablePage):
         try:
             if self.entity == "customers":
                 rows = conn.execute(
-                    """SELECT c.id,c.name,c.phone,c.notes,printf('RM %.2f',COALESCE(SUM(d.balance_cents),0)/100.0)
+                    """SELECT c.id,c.name,c.phone,'' email,c.notes,
+                              printf('RM %.2f',COALESCE(SUM(d.balance_cents),0)/100.0)
                        FROM customers c LEFT JOIN customer_debts d ON d.customer_id=c.id AND d.status='OPEN'
                        WHERE c.is_deleted=0 GROUP BY c.id ORDER BY c.name LIMIT ? OFFSET ?""",
                     (self.page_size, self.offset),
                 ).fetchall()
             else:
                 rows = conn.execute(
-                    """SELECT s.id,s.name,s.phone,s.email,printf('RM %.2f',COALESCE(SUM(p.total_cents-p.paid_cents),0)/100.0)
+                    """SELECT s.id,s.name,s.phone,s.email,s.notes,
+                              printf('RM %.2f',COALESCE(SUM(p.total_cents-p.paid_cents),0)/100.0)
                        FROM suppliers s LEFT JOIN purchases p ON p.supplier_id=s.id
                        WHERE s.is_deleted=0 GROUP BY s.id ORDER BY s.name LIMIT ? OFFSET ?""",
                     (self.page_size, self.offset),
@@ -469,16 +945,89 @@ class EntityPage(PagedTablePage):
             conn.close()
 
     def add_entity(self) -> None:
-        name, ok = QInputDialog.getText(self, "Add", "Name")
-        if not ok or not name.strip():
+        dialog = EntityDialog(self.entity, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        now = utc_now_text()
-        with self.database.transaction() as conn:
-            conn.execute(
-                f"INSERT INTO {self.entity}(name, created_at, updated_at) VALUES (?, ?, ?)",
-                (name.strip(), now, now),
+        try:
+            EntityService(self.database, self.entity).add(
+                dialog.value(), admin_id=self.user.id
             )
-        self.refresh()
+            self.refresh()
+        except Exception as exc:
+            QMessageBox.warning(self, "Record", str(exc))
+
+    def edit_entity(self) -> None:
+        entity_id = self.selected_id()
+        if entity_id is None:
+            QMessageBox.information(self, "Record", "请先选择记录。")
+            return
+        conn = self.database.connect(readonly=True)
+        try:
+            row = conn.execute(
+                f"SELECT * FROM {self.entity} WHERE id=? AND is_deleted=0",
+                (entity_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return
+        dialog = EntityDialog(self.entity, self, row=row)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            EntityService(self.database, self.entity).update(
+                entity_id, dialog.value(), admin_id=self.user.id
+            )
+            self.refresh()
+        except Exception as exc:
+            QMessageBox.warning(self, "Record", str(exc))
+
+    def delete_entity(self) -> None:
+        entity_id = self.selected_id()
+        if entity_id is None:
+            QMessageBox.information(self, "Record", "请先选择记录。")
+            return
+        label = "客户" if self.entity == "customers" else "供应商"
+        if (
+            QMessageBox.question(
+                self,
+                "Delete",
+                f"确认删除所选{label}？历史交易仍会保留。",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        try:
+            EntityService(self.database, self.entity).delete(
+                entity_id, admin_id=self.user.id
+            )
+            self.refresh()
+        except Exception as exc:
+            QMessageBox.warning(self, "Delete", str(exc))
+
+    def manage_supplier_products(self) -> None:
+        if self.entity != "suppliers":
+            return
+        supplier_id = self.selected_id()
+        row = self.table.currentRow()
+        if supplier_id is None or row < 0:
+            QMessageBox.information(self, "Supplier", "请先选择供应商。")
+            return
+        dialog = SupplierProductsDialog(
+            self.database, supplier_id, self.table.item(row, 1).text(), self
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        try:
+            EntityService(self.database, "suppliers").set_supplier_products(
+                supplier_id,
+                dialog.selected_product_ids(),
+                admin_id=self.user.id,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Supplier Products", str(exc))
+            return
+        QMessageBox.information(self, "Supplier Products", "供应商商品目录已保存。")
 
     def payment(self) -> None:
         entity_id = self.selected_id()
@@ -502,32 +1051,33 @@ class EntityPage(PagedTablePage):
         if target is None:
             QMessageBox.information(self, "Payment", "没有未结余额。")
             return
-        amount, ok = QInputDialog.getDouble(
-            self,
-            "Payment",
-            "Amount RM",
-            target["balance_cents"] / 100,
-            0.01,
-            target["balance_cents"] / 100,
-            2,
+        dialog = RecordPaymentDialog(
+            title=(
+                "Customer Payment / 客户还款"
+                if self.entity == "customers"
+                else "Supplier Payment / 供应商付款"
+            ),
+            balance_cents=int(target["balance_cents"]),
+            parent=self,
         )
-        if not ok:
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        amount_cents, method, note = dialog.value()
         try:
             if self.entity == "customers":
                 CustomerPaymentService(self.database).record_payment(
                     debt_id=int(target["id"]),
-                    amount_cents=round(amount * 100),
-                    payment_method="CASH",
-                    note="Admin payment dialog",
+                    amount_cents=amount_cents,
+                    payment_method=method,
+                    note=note,
                     operator_id=self.user.id,
                 )
             else:
                 SupplierPaymentService(self.database).record_payment(
                     purchase_id=int(target["id"]),
-                    amount_cents=round(amount * 100),
-                    payment_method="CASH",
-                    note="Admin payment dialog",
+                    amount_cents=amount_cents,
+                    payment_method=method,
+                    note=note,
                     operator_id=self.user.id,
                 )
             self.refresh()
@@ -675,12 +1225,14 @@ class StocktakePage(PagedTablePage):
 
 
 class AuditPage(PagedTablePage):
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, user: AuthenticatedUser):
         super().__init__(
             database,
             "Audit Log",
             ["ID", "When", "Who", "Action", "Module", "Record", "Before", "After"],
         )
+        self.user = user
+        self.add_action("清除 Audit Log", self.clear_logs, style="DangerButton")
         self.add_action("刷新", self.refresh, style="PrimaryButton")
         self.refresh()
 
@@ -694,6 +1246,38 @@ class AuditPage(PagedTablePage):
             self.set_rows([tuple(row) for row in rows])
         finally:
             conn.close()
+
+    def clear_logs(self) -> None:
+        if (
+            QMessageBox.question(
+                self,
+                "Clear Audit Log",
+                "将清除全部审计记录。系统会先自动备份数据库。确认继续？",
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        password, ok = QInputDialog.getText(
+            self,
+            "Admin Verification",
+            "Current Admin Password",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok:
+            return
+        try:
+            result = AuditMaintenanceService(
+                self.database, AppPaths.default().backups
+            ).clear(admin_id=self.user.id, password=password)
+        except Exception as exc:
+            QMessageBox.warning(self, "Clear Audit Log", str(exc))
+            return
+        self.refresh()
+        QMessageBox.information(
+            self,
+            "Clear Audit Log",
+            f"已清除 {result.removed_count} 条记录，并完成安全备份。",
+        )
 
 
 class MaintenancePage(QWidget):
@@ -739,7 +1323,10 @@ class MaintenancePage(QWidget):
             conn.close()
         self.info.setText(
             f"App Version: {APP_VERSION}\nDB Schema Version: {version}\nDatabase Path: {self.database.path}\n"
-            f"Database Size: {self.database.path.stat().st_size:,} bytes\nProduct Count: {products}\nSale Count: {sales}"
+            f"Backup Path: {AppPaths.default().backups}\nLog Path: {AppPaths.default().logs}\n"
+            f"Export Path: {AppPaths.default().exports}\nReceipt Path: {AppPaths.default().receipts}\n"
+            f"Database Size: {self.database.path.stat().st_size:,} bytes\n"
+            f"Product Count: {products}\nSale Count: {sales}"
         )
 
     def integrity(self) -> None:
@@ -751,9 +1338,11 @@ class MaintenancePage(QWidget):
         )
 
     def backup(self) -> None:
-        result = BackupService(AppPaths.default().backups).create(
+        service = BackupService(AppPaths.default().backups)
+        result = service.create(
             self.database.path, reason="manual"
         )
+        service.prune(keep=30)
         QMessageBox.information(self, "Backup", str(result.path))
 
     def restore(self) -> None:

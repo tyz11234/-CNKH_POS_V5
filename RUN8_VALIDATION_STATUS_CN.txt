@@ -1,0 +1,53 @@
+CNKH Hardware POS V5 — Run #8 完善源码候选版验证状态
+
+版本：5.0.0-alpha.4
+日期：2026-08-10（Asia/Kuala_Lumpur）
+交付类型：完整源码候选版（不是已验收 Windows 安装版）
+GitHub：本轮没有连接、读取或修改用户的 GitHub
+
+一、已完成的本地验证
+
+PASS — Python unittest：42/42
+PASS — pytest：42/42
+PASS — Source Self-Test：65 个 Python 文件、schema 7、版本 5.0.0-alpha.4
+PASS — Python compileall（排除第三方 .testdeps、缓存和构建目录）
+PASS — 关键 Ruff：E9、F63、F7、F82、F401、I
+PASS — Windows workflow YAML 可解析
+PASS — VERSION、Python package、pyproject、Inno Setup 版本一致
+PASS — fresh schema 7、schema 6→7、最新 schema 不重复建立 migration 备份
+
+二、Run #8 主要完成内容
+
+1. Admin 员工账号：新增、编辑姓名/角色/权限、重设密码、启用/停用、自身与最后管理员保护。
+2. 客户：姓名、手机号、备注、新增、编辑、安全删除、欠款与带付款方式/备注的还款。
+3. 供应商：姓名、手机号、Email、备注、新增、编辑、安全删除、应付与带付款方式/备注的付款。
+4. 供应商商品目录：多对多关系；进货 UI 只显示所属商品，服务层也拒绝越权商品。
+5. 进货：重复商品合并、成本/库存 movement、安全删除、负库存阻止、付款 void 历史保留。
+6. Staff POS：真实商品分页、三项权限、购物车 +/−、四种付款、挂单选择与收银员隔离。
+7. 退货：折扣后净额、部分/多次退货、Credit 欠款调整、Cash/Card/DuitNow 退款方式。
+8. 打印：未选择/Windows 默认/指定打印机三种状态、离线错误、80mm 测试 PDF、收据折扣明细。
+9. 报表与日结：日期范围、精确 Decimal 毛利、开档现金、客户现金收款、供应商现金付款、现金退款。
+10. 数据维护：备份/恢复保护、关闭自动备份、30 份保留、Audit Log 密码保护清除与独立系统记录。
+11. 设置：收据、进货、退货和盘点单号前缀保存并用于之后的新单号。
+12. Windows 发布门禁：三档 DPI、两个 EXE 自检、Setup、静默安装、安装后两个自检、SHA-256 清单。
+
+三、尚未在当前环境真实执行
+
+BLOCKED — Linux Qt offscreen 启动：系统缺少 libEGL.so.1。
+NOT RUN — Windows GUI Acceptance 100%、125%、150%。
+NOT RUN — Admin/Staff EXE 构建及 packaged self-test。
+NOT RUN — Setup.exe 构建、静默安装及安装后 self-test。
+NOT RUN — 实体 Windows 80mm 打印机测试。
+
+因此本包不得称为“正式发布版”或“已验收 Windows 安装版”，也不包含任何旧 EXE 或旧 Setup.exe。
+
+四、当前范围限制
+
+- 没有代码签名证书；以后生成的 Setup.exe 仍可能触发 Windows SmartScreen。
+- 不包含 MyInvois、云端同步或多电脑服务器同步。
+- 未由 fixture 覆盖的未知 V4 数据库变体不能宣称全部兼容；升级前必须备份。
+- 换货采用可审计的“原销售退货 + 新销售”两步流程，尚无一键式独立换货单。
+
+五、最终 Windows 可安装候选版门槛
+
+只有 Windows Release Gate 的三档真实鼠标 UI、Admin/Staff EXE、两个 packaged self-test、Setup.exe、静默安装及安装后两个 self-test 全部通过，才能交付新的 Windows 安装候选版。

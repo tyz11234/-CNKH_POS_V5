@@ -12,7 +12,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--scale", required=True)
     args = parser.parse_args()
-    from PySide6.QtCore import QPoint, QPointF, QTimer, Qt
+    from PySide6.QtCore import QPoint, QPointF, Qt, QTimer
     from PySide6.QtGui import QShortcut, QWheelEvent
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import (
@@ -27,8 +27,8 @@ def main() -> int:
         QLineEdit,
         QMessageBox,
         QPushButton,
-        QTabWidget,
         QTableWidget,
+        QTabWidget,
     )
 
     from cnkh_pos.database.bootstrap import bootstrap_database
@@ -49,22 +49,30 @@ def main() -> int:
     from cnkh_pos.ui.admin import AdminWindow
     from cnkh_pos.ui.admin.dashboard import DashboardPage
     from cnkh_pos.ui.admin.data_pages import (
+        AuditPage,
+        EntityDialog,
         EntityPage,
         MaintenancePage,
         NewPurchaseDialog,
         ProductDialog,
         ProductsPage,
         PurchasesPage,
+        RecordPaymentDialog,
+        ReturnSaleDialog,
+        SalesPage,
         StocktakeCountDialog,
         StocktakePage,
+        SupplierProductsDialog,
     )
     from cnkh_pos.ui.admin.settings_pages import (
         CategoryDialog,
         DailyClosingPage,
+        DocumentPrefixesWidget,
         QuickAmountsWidget,
         ReceiptSettingsWidget,
         ReportsPage,
     )
+    from cnkh_pos.ui.admin.users_page import EditUserDialog, NewUserDialog, UsersPage
     from cnkh_pos.ui.dialogs.checkout import CheckoutDialog, SaleCompletedDialog
     from cnkh_pos.ui.staff import StaffWindow
     from cnkh_pos.ui.theme import apply_theme
@@ -93,7 +101,11 @@ def main() -> int:
                 display_name="Cashier",
                 password="SafePass456!",
                 role="STAFF",
-                permissions={"apply_discount": True},
+                permissions={
+                    "apply_discount": True,
+                    "manage_quick_amounts": True,
+                    "reprint_receipt": True,
+                },
                 admin_id=admin_id,
             )
             admin = AuthService.authenticate(
@@ -145,6 +157,14 @@ def main() -> int:
             ).fetchone()[0]
         )
         conn.close()
+        with database.transaction() as conn:
+            now = utc_now_text()
+            conn.executemany(
+                """INSERT INTO supplier_products(
+                    supplier_id,product_id,is_active,created_at,updated_at
+                ) VALUES (?,?,1,?,?)""",
+                [(supplier_id, product_id, now, now) for product_id in products],
+            )
 
         app = QApplication.instance() or QApplication([])
         apply_theme(app)
@@ -244,6 +264,16 @@ def main() -> int:
             "custom POS shortcuts are forbidden"
         )
         assert_visible_buttons(staff_window, QPushButton, QAbstractScrollArea)
+        assert staff_window.discount_button.isEnabled()
+        assert staff_window.reprint_button.isEnabled()
+        first_page_ids = list(staff_window.visible_product_ids)
+        assert staff_window.product_next.isEnabled()
+        QTest.mouseClick(staff_window.product_next, Qt.MouseButton.LeftButton)
+        app.processEvents()
+        assert staff_window.visible_product_ids != first_page_ids
+        QTest.mouseClick(staff_window.product_previous, Qt.MouseButton.LeftButton)
+        app.processEvents()
+        assert staff_window.visible_product_ids == first_page_ids
 
         # Fuzzy search through the real search button, maximum three suggestions,
         # and mouse selection. This deliberately avoids calling StaffWindow slots
@@ -457,7 +487,7 @@ def main() -> int:
             assert row["payment_method"] == method
             return int(row["id"])
 
-        run_staff_sale(
+        staff_cash_sale_id = run_staff_sale(
             "CASH", products[0], print_receipt=True, open_settings=True
         )
         run_staff_sale("CARD", products[1], print_receipt=False)
@@ -465,6 +495,53 @@ def main() -> int:
         staff_credit_sale_id = run_staff_sale(
             "CREDIT", products[3], print_receipt=False
         )
+
+        # Return a completed Cash sale through the Admin sales page and modal.
+        QTest.mouseClick(sidebar_buttons[2], Qt.MouseButton.LeftButton)
+        sales_page = admin_window.pages.currentWidget()
+        assert isinstance(sales_page, SalesPage)
+        sales_page.refresh()
+        cash_sale_row = next(
+            row
+            for row in range(sales_page.table.rowCount())
+            if int(sales_page.table.item(row, 0).text()) == staff_cash_sale_id
+        )
+        sales_page.table.selectRow(cash_sale_row)
+
+        def fill_return(dialog: QDialog) -> None:
+            assert isinstance(dialog, ReturnSaleDialog)
+            quantity = dialog.table.cellWidget(0, 5)
+            assert isinstance(quantity, QDoubleSpinBox)
+            quantity.setValue(quantity.maximum())
+            dialog.reason.setText("UI acceptance return")
+            dialog.refund_method.setCurrentIndex(
+                dialog.refund_method.findData("CASH")
+            )
+            schedule_modal(
+                app,
+                QTimer,
+                lambda candidate: isinstance(candidate, QMessageBox),
+                dismiss_message,
+            )
+            buttons = dialog.findChild(QDialogButtonBox)
+            assert buttons is not None
+            QTest.mouseClick(
+                buttons.button(QDialogButtonBox.StandardButton.Save),
+                Qt.MouseButton.LeftButton,
+            )
+
+        schedule_modal(
+            app, QTimer, lambda dialog: isinstance(dialog, ReturnSaleDialog), fill_return
+        )
+        QTest.mouseClick(
+            button_by_text(sales_page, QPushButton, "销售退货"),
+            Qt.MouseButton.LeftButton,
+        )
+        conn = database.connect(readonly=True)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sale_returns WHERE sale_id=?", (staff_cash_sale_id,)
+        ).fetchone()[0] == 1
+        conn.close()
 
         schedule_modal(
             app,
@@ -591,6 +668,50 @@ def main() -> int:
         assert int(conn.execute("SELECT COUNT(*) FROM products").fetchone()[0]) == product_count + 1
         conn.close()
 
+        # Product editing and the Excel import picker are both wired to real actions.
+        while products_page.next.isEnabled():
+            QTest.mouseClick(products_page.next, Qt.MouseButton.LeftButton)
+            app.processEvents()
+        edited_row = next(
+            row
+            for row in range(products_page.table.rowCount())
+            if products_page.table.item(row, 1).text() == "UI Acceptance Test Product"
+        )
+        products_page.table.selectRow(edited_row)
+
+        def edit_product(dialog: QDialog) -> None:
+            assert isinstance(dialog, ProductDialog)
+            dialog.location.setText("QA Rack Updated")
+            buttons = dialog.findChild(QDialogButtonBox)
+            assert buttons is not None
+            QTest.mouseClick(
+                buttons.button(QDialogButtonBox.StandardButton.Save),
+                Qt.MouseButton.LeftButton,
+            )
+
+        schedule_modal(
+            app, QTimer, lambda dialog: isinstance(dialog, ProductDialog), edit_product
+        )
+        QTest.mouseClick(
+            button_by_text(products_page, QPushButton, "编辑"),
+            Qt.MouseButton.LeftButton,
+        )
+        conn = database.connect(readonly=True)
+        assert conn.execute(
+            "SELECT location FROM products WHERE sku='UI-ACCEPT-001'"
+        ).fetchone()[0] == "QA Rack Updated"
+        conn.close()
+        schedule_modal(
+            app,
+            QTimer,
+            lambda dialog: isinstance(dialog, QFileDialog),
+            lambda dialog: dialog.reject(),
+        )
+        QTest.mouseClick(
+            button_by_text(products_page, QPushButton, "Excel 导入"),
+            Qt.MouseButton.LeftButton,
+        )
+
         # Stock adjustment is entered in the real count table before completion.
         product_tabs.setCurrentIndex(1)
         stocktake_page = product_tabs.currentWidget()
@@ -645,6 +766,97 @@ def main() -> int:
         ).fetchone()[0] == "COMPLETED"
         conn.close()
 
+        # Add a full customer and supplier, then configure the supplier catalogue.
+        QTest.mouseClick(sidebar_buttons[4], Qt.MouseButton.LeftButton)
+        customer_page = admin_window.pages.currentWidget()
+        assert isinstance(customer_page, EntityPage)
+
+        def fill_customer(dialog: QDialog) -> None:
+            assert isinstance(dialog, EntityDialog)
+            dialog.name.setText("UI Full Customer")
+            dialog.phone.setText("012-555-0101")
+            dialog.notes.setPlainText("Customer note from GUI acceptance")
+            buttons = dialog.findChild(QDialogButtonBox)
+            assert buttons is not None
+            QTest.mouseClick(
+                buttons.button(QDialogButtonBox.StandardButton.Save),
+                Qt.MouseButton.LeftButton,
+            )
+
+        schedule_modal(
+            app, QTimer, lambda dialog: isinstance(dialog, EntityDialog), fill_customer
+        )
+        QTest.mouseClick(
+            button_by_text(customer_page, QPushButton, "＋ 新增"),
+            Qt.MouseButton.LeftButton,
+        )
+
+        QTest.mouseClick(sidebar_buttons[5], Qt.MouseButton.LeftButton)
+        supplier_page = admin_window.pages.currentWidget()
+        assert isinstance(supplier_page, EntityPage)
+
+        def fill_supplier(dialog: QDialog) -> None:
+            assert isinstance(dialog, EntityDialog)
+            dialog.name.setText("UI Full Supplier")
+            dialog.phone.setText("019-555-0202")
+            dialog.email.setText("ui-supplier@example.com")
+            dialog.notes.setPlainText("Supplier note from GUI acceptance")
+            buttons = dialog.findChild(QDialogButtonBox)
+            assert buttons is not None
+            QTest.mouseClick(
+                buttons.button(QDialogButtonBox.StandardButton.Save),
+                Qt.MouseButton.LeftButton,
+            )
+
+        schedule_modal(
+            app, QTimer, lambda dialog: isinstance(dialog, EntityDialog), fill_supplier
+        )
+        QTest.mouseClick(
+            button_by_text(supplier_page, QPushButton, "＋ 新增"),
+            Qt.MouseButton.LeftButton,
+        )
+        supplier_page.refresh()
+        supplier_row = next(
+            row
+            for row in range(supplier_page.table.rowCount())
+            if supplier_page.table.item(row, 1).text() == "UI Full Supplier"
+        )
+        supplier_page.table.selectRow(supplier_row)
+
+        def choose_supplier_product(dialog: QDialog) -> None:
+            assert isinstance(dialog, SupplierProductsDialog)
+            dialog.table.cellWidget(0, 3).setChecked(True)
+            schedule_modal(
+                app,
+                QTimer,
+                lambda candidate: isinstance(candidate, QMessageBox),
+                dismiss_message,
+            )
+            buttons = dialog.findChild(QDialogButtonBox)
+            assert buttons is not None
+            QTest.mouseClick(
+                buttons.button(QDialogButtonBox.StandardButton.Save),
+                Qt.MouseButton.LeftButton,
+            )
+
+        schedule_modal(
+            app,
+            QTimer,
+            lambda dialog: isinstance(dialog, SupplierProductsDialog),
+            choose_supplier_product,
+        )
+        QTest.mouseClick(
+            button_by_text(supplier_page, QPushButton, "供货商品"),
+            Qt.MouseButton.LeftButton,
+        )
+        conn = database.connect(readonly=True)
+        assert conn.execute(
+            """SELECT COUNT(*) FROM supplier_products sp
+               JOIN suppliers s ON s.id=sp.supplier_id
+               WHERE s.name='UI Full Supplier' AND sp.is_active=1"""
+        ).fetchone()[0] == 1
+        conn.close()
+
         # New purchase and supplier payment through the Admin page.
         QTest.mouseClick(sidebar_buttons[3], Qt.MouseButton.LeftButton)
         purchases_page = admin_window.pages.currentWidget()
@@ -684,20 +896,21 @@ def main() -> int:
                 break
 
         def supplier_amount(dialog: QDialog) -> None:
-            assert isinstance(dialog, QInputDialog)
-            schedule_modal(
-                app,
-                QTimer,
-                lambda candidate: isinstance(candidate, QInputDialog)
-                and candidate is not dialog,
-                lambda method_dialog: method_dialog.accept(),
+            assert isinstance(dialog, RecordPaymentDialog)
+            dialog.amount.setValue(1.00)
+            dialog.method.setCurrentText("CARD")
+            dialog.note.setPlainText("UI supplier payment")
+            buttons = dialog.findChild(QDialogButtonBox)
+            assert buttons is not None
+            QTest.mouseClick(
+                buttons.button(QDialogButtonBox.StandardButton.Save),
+                Qt.MouseButton.LeftButton,
             )
-            enter_double(dialog, 1.00)
 
         schedule_modal(
             app,
             QTimer,
-            lambda dialog: isinstance(dialog, QInputDialog),
+            lambda dialog: isinstance(dialog, RecordPaymentDialog),
             supplier_amount,
         )
         QTest.mouseClick(
@@ -710,6 +923,38 @@ def main() -> int:
             (ui_purchase_id,),
         ).fetchone()[0] == 1
         conn.close()
+        purchases_page.refresh()
+        for row in range(purchases_page.table.rowCount()):
+            if int(purchases_page.table.item(row, 0).text()) == ui_purchase_id:
+                purchases_page.table.selectRow(row)
+                break
+
+        def confirm_delete_purchase(dialog: QDialog) -> None:
+            assert isinstance(dialog, QMessageBox)
+            yes = dialog.button(QMessageBox.StandardButton.Yes)
+            assert yes is not None
+            QTest.mouseClick(yes, Qt.MouseButton.LeftButton)
+
+        schedule_modal(
+            app,
+            QTimer,
+            lambda dialog: isinstance(dialog, QMessageBox),
+            confirm_delete_purchase,
+        )
+        QTest.mouseClick(
+            button_by_text(purchases_page, QPushButton, "删除进货"),
+            Qt.MouseButton.LeftButton,
+        )
+        conn = database.connect(readonly=True)
+        assert conn.execute(
+            "SELECT COUNT(*) FROM purchases WHERE id=?", (ui_purchase_id,)
+        ).fetchone()[0] == 0
+        void_payment = conn.execute(
+            "SELECT purchase_id,voided_at FROM supplier_payments ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert void_payment["purchase_id"] is None
+        assert void_payment["voided_at"] is not None
+        conn.close()
 
         # Settle the debt created by the real Staff Credit checkout.
         QTest.mouseClick(sidebar_buttons[4], Qt.MouseButton.LeftButton)
@@ -717,11 +962,23 @@ def main() -> int:
         assert isinstance(customer_page, EntityPage)
         customer_page.refresh()
         customer_page.table.selectRow(0)
+        def customer_amount(dialog: QDialog) -> None:
+            assert isinstance(dialog, RecordPaymentDialog)
+            dialog.amount.setValue(dialog.amount.maximum())
+            dialog.method.setCurrentText("DUITNOW_QR")
+            dialog.note.setPlainText("UI customer payment")
+            buttons = dialog.findChild(QDialogButtonBox)
+            assert buttons is not None
+            QTest.mouseClick(
+                buttons.button(QDialogButtonBox.StandardButton.Save),
+                Qt.MouseButton.LeftButton,
+            )
+
         schedule_modal(
             app,
             QTimer,
-            lambda dialog: isinstance(dialog, QInputDialog),
-            lambda dialog: enter_double(dialog),
+            lambda dialog: isinstance(dialog, RecordPaymentDialog),
+            customer_amount,
         )
         QTest.mouseClick(
             button_by_text(customer_page, QPushButton, "记录还款"),
@@ -734,8 +991,67 @@ def main() -> int:
         ).fetchone()[0] == "CLOSED"
         conn.close()
 
+        # Create and edit a Staff account with real permission controls.
+        QTest.mouseClick(sidebar_buttons[6], Qt.MouseButton.LeftButton)
+        users_page = admin_window.pages.currentWidget()
+        assert isinstance(users_page, UsersPage)
+
+        def fill_user(dialog: QDialog) -> None:
+            assert isinstance(dialog, NewUserDialog)
+            dialog.username.setText("ui_staff")
+            dialog.display_name.setText("UI Staff")
+            dialog.password.setText("SafePass999!")
+            dialog.confirm.setText("SafePass999!")
+            dialog.apply_discount.setChecked(True)
+            dialog.manage_quick.setChecked(True)
+            buttons = dialog.findChild(QDialogButtonBox)
+            assert buttons is not None
+            QTest.mouseClick(
+                buttons.button(QDialogButtonBox.StandardButton.Save),
+                Qt.MouseButton.LeftButton,
+            )
+
+        schedule_modal(
+            app, QTimer, lambda dialog: isinstance(dialog, NewUserDialog), fill_user
+        )
+        QTest.mouseClick(
+            button_by_text(users_page, QPushButton, "＋ 新增账号"),
+            Qt.MouseButton.LeftButton,
+        )
+        users_page.refresh()
+        ui_staff_row = next(
+            row
+            for row in range(users_page.table.rowCount())
+            if users_page.table.item(row, 1).text() == "ui_staff"
+        )
+        users_page.table.selectRow(ui_staff_row)
+
+        def edit_user(dialog: QDialog) -> None:
+            assert isinstance(dialog, EditUserDialog)
+            dialog.display_name.setText("UI Senior Staff")
+            dialog.reprint.setChecked(True)
+            buttons = dialog.findChild(QDialogButtonBox)
+            assert buttons is not None
+            QTest.mouseClick(
+                buttons.button(QDialogButtonBox.StandardButton.Save),
+                Qt.MouseButton.LeftButton,
+            )
+
+        schedule_modal(
+            app, QTimer, lambda dialog: isinstance(dialog, EditUserDialog), edit_user
+        )
+        QTest.mouseClick(
+            button_by_text(users_page, QPushButton, "编辑账号/权限"),
+            Qt.MouseButton.LeftButton,
+        )
+        conn = database.connect(readonly=True)
+        assert conn.execute(
+            "SELECT display_name FROM users WHERE username='ui_staff'"
+        ).fetchone()[0] == "UI Senior Staff"
+        conn.close()
+
         # Category Add/Rename and every settings tab.
-        QTest.mouseClick(sidebar_buttons[7], Qt.MouseButton.LeftButton)
+        QTest.mouseClick(sidebar_buttons[8], Qt.MouseButton.LeftButton)
         settings_page = admin_window.pages.currentWidget()
         settings_tabs = settings_page.findChild(QTabWidget)
         assert settings_tabs is not None
@@ -783,6 +1099,13 @@ def main() -> int:
         receipt_settings = settings_tabs.currentWidget()
         assert isinstance(receipt_settings, ReceiptSettingsWidget)
         receipt_settings.store.setText("CNKH Hardware UI Acceptance")
+        receipt_settings.printer.setCurrentIndex(1)
+        schedule_modal(
+            app,
+            QTimer,
+            lambda dialog: isinstance(dialog, QMessageBox),
+            dismiss_message,
+        )
         QTest.mouseClick(receipt_settings.save_button, Qt.MouseButton.LeftButton)
         schedule_modal(
             app,
@@ -831,10 +1154,21 @@ def main() -> int:
             Qt.MouseButton.LeftButton,
         )
         settings_tabs.setCurrentIndex(2)
+        prefixes = settings_tabs.currentWidget()
+        assert isinstance(prefixes, DocumentPrefixesWidget)
+        prefixes.controls["PURCHASE"].setText("GUI-PI-")
+        schedule_modal(
+            app,
+            QTimer,
+            lambda dialog: isinstance(dialog, QMessageBox),
+            dismiss_message,
+        )
+        QTest.mouseClick(prefixes.save_button, Qt.MouseButton.LeftButton)
+        settings_tabs.setCurrentIndex(3)
         assert settings_tabs.currentWidget().isVisible()
 
         # Export a real XLSX and complete Daily Cash Closing with the mouse.
-        QTest.mouseClick(sidebar_buttons[6], Qt.MouseButton.LeftButton)
+        QTest.mouseClick(sidebar_buttons[7], Qt.MouseButton.LeftButton)
         report_tabs = admin_window.pages.currentWidget()
         assert isinstance(report_tabs, QTabWidget)
         report_tabs.setCurrentIndex(0)
@@ -871,7 +1205,7 @@ def main() -> int:
         conn.close()
 
         # Integrity, backup, and the actual Restore picker (safely cancelled).
-        QTest.mouseClick(sidebar_buttons[8], Qt.MouseButton.LeftButton)
+        QTest.mouseClick(sidebar_buttons[9], Qt.MouseButton.LeftButton)
         maintenance_tabs = admin_window.pages.currentWidget()
         assert isinstance(maintenance_tabs, QTabWidget)
         maintenance_tabs.setCurrentIndex(0)
@@ -904,6 +1238,53 @@ def main() -> int:
             / "Backups"
         )
         assert list(backup_dir.glob("hardware_pos_*.db"))
+
+        # Audit Log clear is reachable but rejects an incorrect Admin password.
+        maintenance_tabs.setCurrentIndex(1)
+        audit_page = maintenance_tabs.currentWidget()
+        assert isinstance(audit_page, AuditPage)
+        conn = database.connect(readonly=True)
+        audit_before = int(conn.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0])
+        conn.close()
+
+        def reject_audit_password(dialog: QDialog) -> None:
+            assert isinstance(dialog, QInputDialog)
+            control = dialog.findChild(QLineEdit)
+            assert control is not None
+            control.setText("wrong password")
+            schedule_modal(
+                app,
+                QTimer,
+                lambda candidate: isinstance(candidate, QMessageBox),
+                dismiss_message,
+            )
+            dialog.accept()
+
+        def confirm_audit_clear(dialog: QDialog) -> None:
+            assert isinstance(dialog, QMessageBox)
+            schedule_modal(
+                app,
+                QTimer,
+                lambda candidate: isinstance(candidate, QInputDialog),
+                reject_audit_password,
+            )
+            yes = dialog.button(QMessageBox.StandardButton.Yes)
+            assert yes is not None
+            QTest.mouseClick(yes, Qt.MouseButton.LeftButton)
+
+        schedule_modal(
+            app,
+            QTimer,
+            lambda dialog: isinstance(dialog, QMessageBox),
+            confirm_audit_clear,
+        )
+        QTest.mouseClick(
+            button_by_text(audit_page, QPushButton, "清除 Audit Log"),
+            Qt.MouseButton.LeftButton,
+        )
+        conn = database.connect(readonly=True)
+        assert int(conn.execute("SELECT COUNT(*) FROM audit_logs").fetchone()[0]) == audit_before
+        conn.close()
         ok, messages = database.integrity_check()
         assert ok, messages
 

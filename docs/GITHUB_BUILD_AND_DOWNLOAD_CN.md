@@ -19,6 +19,7 @@ Artifact 内应包含：
 - `CNKH_POS_Staff.exe`
 - `CNKH_Hardware_POS_V5_Setup.exe`
 - `release-manifest.json`
+- `SHA256SUMS.txt`
 - `build-info.json`
 - `ui-acceptance-artifacts` UI 验收证据
 
@@ -30,7 +31,7 @@ Artifact 内应包含：
 4. 再点击绿色的 **Run workflow**。
 5. 等待所有步骤完成并显示绿色勾号。
 
-如果任何步骤失败，不要下载或使用该次运行。工作流在测试、UI 验收、EXE 自检或 Installer 构建失败时会阻止 Artifact 上传。
+如果任何步骤失败，不要下载或使用该次运行。工作流在测试、三档 UI 验收、EXE 自检、Installer 构建、静默安装或安装后自检失败时会阻止 Artifact 上传。
 
 ## 数据位置与卸载
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QFrame,
     QGraphicsDropShadowEffect,
@@ -7,7 +8,6 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from PySide6.QtGui import QColor
 
 
 class Card(QFrame):

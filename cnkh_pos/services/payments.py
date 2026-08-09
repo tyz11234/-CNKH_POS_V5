@@ -25,6 +25,9 @@ class CustomerPaymentService:
     ) -> int:
         if amount_cents <= 0:
             raise PaymentError("payment must be positive")
+        method = payment_method.upper()
+        if method not in {"CASH", "CARD", "DUITNOW_QR"}:
+            raise PaymentError("unsupported payment method")
         with self.database.transaction() as conn:
             debt = conn.execute(
                 "SELECT * FROM customer_debts WHERE id=?", (debt_id,)
@@ -43,8 +46,8 @@ class CustomerPaymentService:
                 (
                     debt["customer_id"],
                     amount_cents,
-                    payment_method.upper(),
-                    note,
+                    method,
+                    note.strip(),
                     operator_id,
                     now,
                     debt_id,
@@ -90,6 +93,9 @@ class SupplierPaymentService:
     ) -> int:
         if amount_cents <= 0:
             raise PaymentError("payment must be positive")
+        method = payment_method.upper()
+        if method not in {"CASH", "CARD", "DUITNOW_QR"}:
+            raise PaymentError("unsupported payment method")
         with self.database.transaction() as conn:
             purchase = conn.execute(
                 "SELECT * FROM purchases WHERE id=?", (purchase_id,)
@@ -104,8 +110,8 @@ class SupplierPaymentService:
                 supplier_id=int(purchase["supplier_id"]),
                 purchase_id=purchase_id,
                 amount_cents=amount_cents,
-                payment_method=payment_method,
-                note=note,
+                payment_method=method,
+                note=note.strip(),
                 operator_id=operator_id,
             )
             new_paid = int(purchase["paid_cents"]) + amount_cents

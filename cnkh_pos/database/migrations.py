@@ -4,7 +4,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Callable
 
 from cnkh_pos.config import SCHEMA_VERSION
@@ -206,6 +206,40 @@ def migration_006_transaction_snapshots(conn: sqlite3.Connection) -> None:
     )
 
 
+def migration_007_cash_closing_and_release_metadata(conn: sqlite3.Connection) -> None:
+    supplier_products_statement = next(
+        statement
+        for statement in OPERATIONS_SCHEMA
+        if "CREATE TABLE IF NOT EXISTS supplier_products" in statement
+    )
+    conn.execute(supplier_products_statement)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_supplier_products_product ON supplier_products(product_id, is_active)"
+    )
+    if "opening_cash_cents" not in _columns(conn, "daily_cash_closings"):
+        conn.execute(
+            "ALTER TABLE daily_cash_closings ADD COLUMN opening_cash_cents INTEGER NOT NULL DEFAULT 0"
+        )
+    if "refund_method" not in _columns(conn, "sale_returns"):
+        conn.execute(
+            "ALTER TABLE sale_returns ADD COLUMN refund_method TEXT NOT NULL DEFAULT 'ORIGINAL'"
+        )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO app_version_history(
+            version, release_date, new_features, bug_fixes, db_migration_version
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            "5.0.0-alpha.4",
+            "2026-08-10",
+            "Operational completion: users, catalog workflow, reports, held orders",
+            "Inventory, discounted returns, cash closing, settings and backup fixes",
+            7,
+        ),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Migration:
     version: int
@@ -220,6 +254,11 @@ MIGRATIONS: tuple[Migration, ...] = (
     Migration(4, "operations_schema", migration_004_operations_schema),
     Migration(5, "release_metadata", migration_005_release_metadata),
     Migration(6, "transaction_snapshots", migration_006_transaction_snapshots),
+    Migration(
+        7,
+        "cash_closing_and_release_metadata",
+        migration_007_cash_closing_and_release_metadata,
+    ),
 )
 
 

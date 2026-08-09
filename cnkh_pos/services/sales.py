@@ -3,11 +3,12 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 from cnkh_pos.database.connection import Database
 from cnkh_pos.database.migrations import utc_now_text
 from cnkh_pos.services.audit import AuditService
+from cnkh_pos.services.document_numbers import configured_document_prefix
 from cnkh_pos.services.quantities import parse_quantity, quantity_text
 from cnkh_pos.services.receipt_numbers import next_receipt_number
 
@@ -58,6 +59,9 @@ class SalesService:
     ) -> SaleResult:
         if not lines:
             raise SaleError("cart is empty")
+        product_ids = [line.product_id for line in lines]
+        if len(product_ids) != len(set(product_ids)):
+            raise SaleError("cart contains duplicate product lines")
         method = payment_method.upper()
         if method not in {"CASH", "CARD", "DUITNOW_QR", "CREDIT"}:
             raise SaleError("unsupported payment method")
@@ -105,6 +109,12 @@ class SalesService:
             if method == "CREDIT":
                 if customer_id is None:
                     raise SaleError("credit sale requires a customer")
+                customer = conn.execute(
+                    "SELECT id FROM customers WHERE id=? AND is_deleted=0",
+                    (customer_id,),
+                ).fetchone()
+                if customer is None:
+                    raise SaleError("credit customer is not available")
                 if paid_cents < 0 or paid_cents > total:
                     raise SaleError("invalid paid amount")
                 change = 0
@@ -302,6 +312,7 @@ class ReturnService:
         quantities_by_sale_item: dict[int, Decimal],
         reason: str,
         operator_id: int,
+        refund_method: str = "ORIGINAL",
     ) -> str:
         if not quantities_by_sale_item:
             raise SaleError("return has no items")
@@ -310,7 +321,17 @@ class ReturnService:
             if sale is None:
                 raise LookupError("sale not found")
             returned_at = utc_now_text()
-            number = f"RTN-{sale['receipt_no']}-{int(conn.execute('SELECT COUNT(*) FROM sale_returns WHERE sale_id=?', (sale_id,)).fetchone()[0]) + 1:02d}"
+            method = refund_method.upper()
+            if method == "ORIGINAL":
+                method = (
+                    "CREDIT_ADJUSTMENT"
+                    if sale["payment_method"] == "CREDIT"
+                    else str(sale["payment_method"])
+                )
+            if method not in {"CASH", "CARD", "DUITNOW_QR", "CREDIT_ADJUSTMENT"}:
+                raise SaleError("unsupported refund method")
+            prefix = configured_document_prefix(conn, "RETURN", "RTN-")
+            number = f"{prefix}{sale['receipt_no']}-{int(conn.execute('SELECT COUNT(*) FROM sale_returns WHERE sale_id=?', (sale_id,)).fetchone()[0]) + 1:02d}"
             prepared: list[tuple[sqlite3.Row, Decimal, Decimal, int]] = []
             total_refund = 0
             for item_id, raw_quantity in quantities_by_sale_item.items():
@@ -322,8 +343,18 @@ class ReturnService:
                 if item is None:
                     raise SaleError("sale item does not belong to sale")
                 sold = parse_quantity(item["quantity_decimal"])
-                already = parse_quantity(item["returned_stock_decimal"])
-                if quantity + already > sold:
+                prior_returns = conn.execute(
+                    """SELECT sri.quantity_decimal,sri.refund_cents
+                       FROM sale_return_items sri
+                       JOIN sale_returns sr ON sr.id=sri.return_id
+                       WHERE sri.sale_item_id=?""",
+                    (item_id,),
+                ).fetchall()
+                already_quantity = sum(
+                    (parse_quantity(row["quantity_decimal"]) for row in prior_returns),
+                    Decimal("0"),
+                )
+                if quantity + already_quantity > sold:
                     raise SaleError("return quantity exceeds sold quantity")
                 deduction = parse_quantity(item["stock_deduction_decimal"])
                 stock_restore = (
@@ -331,12 +362,38 @@ class ReturnService:
                     .quantize(Decimal("0.000001"))
                     .normalize()
                 )
-                refund = _line_total(int(item["unit_price_cents"]), quantity)
+                line_net = int(item["subtotal_cents"])
+                refunded_before = sum(int(row["refund_cents"]) for row in prior_returns)
+                if quantity + already_quantity == sold:
+                    refund = line_net - refunded_before
+                else:
+                    refund = int(
+                        (Decimal(line_net) * quantity / sold).quantize(
+                            Decimal("1"), rounding=ROUND_HALF_UP
+                        )
+                    )
                 total_refund += refund
                 prepared.append((item, quantity, stock_restore, refund))
+            if method == "CREDIT_ADJUSTMENT":
+                debt = conn.execute(
+                    "SELECT * FROM customer_debts WHERE sale_id=?", (sale_id,)
+                ).fetchone()
+                if debt is None or int(debt["balance_cents"]) < total_refund:
+                    raise SaleError(
+                        "credit balance is lower than refund; choose Cash, Card or DuitNow refund"
+                    )
+                balance = int(debt["balance_cents"]) - total_refund
+                status = "CLOSED" if balance == 0 else "OPEN"
+                conn.execute(
+                    """UPDATE customer_debts SET balance_cents=?,status=?,settled_at=?
+                       WHERE id=?""",
+                    (balance, status, returned_at if status == "CLOSED" else None, debt["id"]),
+                )
             cursor = conn.execute(
-                "INSERT INTO sale_returns(return_no, sale_id, total_cents, reason, operator_id, returned_at) VALUES (?, ?, ?, ?, ?, ?)",
-                (number, sale_id, total_refund, reason, operator_id, returned_at),
+                """INSERT INTO sale_returns(
+                    return_no,sale_id,total_cents,refund_method,reason,operator_id,returned_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (number, sale_id, total_refund, method, reason, operator_id, returned_at),
             )
             return_id = int(cursor.lastrowid)
             for item, quantity, restore, refund in prepared:
@@ -391,6 +448,10 @@ class ReturnService:
                 user_id=operator_id,
                 record_type="SALE_RETURN",
                 record_id=return_id,
-                new_value={"return_no": number, "refund_cents": total_refund},
+                new_value={
+                    "return_no": number,
+                    "refund_cents": total_refund,
+                    "refund_method": method,
+                },
             )
             return number

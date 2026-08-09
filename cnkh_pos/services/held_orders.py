@@ -79,12 +79,41 @@ class HeldOrderService:
             return HeldOrder(held_id, number, payload)
 
     def retrieve_latest(self, *, cashier_id: int) -> HeldOrder:
+        held = self.list_held(cashier_id=cashier_id, limit=1)
+        if not held:
+            raise LookupError("no held order")
+        return self.retrieve(held[0].id, cashier_id=cashier_id)
+
+    def list_held(self, *, cashier_id: int, limit: int = 50) -> list[HeldOrder]:
+        conn = self.database.connect(readonly=True)
+        try:
+            rows = conn.execute(
+                """SELECT * FROM held_orders
+                   WHERE status='HELD' AND cashier_id=?
+                   ORDER BY held_at DESC,id DESC LIMIT ?""",
+                (cashier_id, limit),
+            ).fetchall()
+            return [
+                HeldOrder(
+                    int(row["id"]),
+                    str(row["hold_no"]),
+                    json.loads(row["payload_json"]),
+                )
+                for row in rows
+            ]
+        finally:
+            conn.close()
+
+    def retrieve(self, held_id: int, *, cashier_id: int) -> HeldOrder:
         with self.database.transaction() as conn:
             row = conn.execute(
-                "SELECT * FROM held_orders WHERE status='HELD' ORDER BY held_at DESC,id DESC LIMIT 1"
+                "SELECT * FROM held_orders WHERE id=? AND status='HELD' AND cashier_id=?",
+                (held_id, cashier_id),
             ).fetchone()
             if row is None:
                 raise LookupError("no held order")
+            payload = json.loads(row["payload_json"])
+            cart_state_from_held_payload(payload)
             conn.execute(
                 "UPDATE held_orders SET status='RETRIEVED',retrieved_at=? WHERE id=?",
                 (utc_now_text(), row["id"]),
@@ -98,5 +127,5 @@ class HeldOrderService:
                 record_id=row["id"],
             )
             return HeldOrder(
-                int(row["id"]), str(row["hold_no"]), json.loads(row["payload_json"])
+                int(row["id"]), str(row["hold_no"]), payload
             )
