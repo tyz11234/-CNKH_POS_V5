@@ -32,15 +32,15 @@ jobs:
       - name: Windows GUI acceptance 100 percent
         env:
           QT_SCALE_FACTOR: "1.0"
-        run: python tools/windows_gui_acceptance.py --scale 100
+        run: python -m tools.windows_gui_acceptance --scale 100
       - name: Windows GUI acceptance 125 percent
         env:
           QT_SCALE_FACTOR: "1.25"
-        run: python tools/windows_gui_acceptance.py --scale 125
+        run: python -m tools.windows_gui_acceptance --scale 125
       - name: Windows GUI acceptance 150 percent
         env:
           QT_SCALE_FACTOR: "1.5"
-        run: python tools/windows_gui_acceptance.py --scale 150
+        run: python -m tools.windows_gui_acceptance --scale 150
       - name: Build Admin EXE
         run: pyinstaller --noconfirm --clean build/admin.spec
       - name: Build Staff EXE
