@@ -15,6 +15,7 @@ def main() -> int:
     from PySide6.QtGui import QShortcut, QWheelEvent
     from PySide6.QtTest import QTest
     from PySide6.QtWidgets import (
+        QAbstractScrollArea,
         QApplication,
         QDialog,
         QDoubleSpinBox,
@@ -130,13 +131,15 @@ def main() -> int:
         for page_index in range(admin_window.pages.count()):
             admin_window.pages.setCurrentIndex(page_index)
             app.processEvents()
-            assert_visible_buttons(admin_window, QPushButton)
+            assert_visible_buttons(admin_window, QPushButton, QAbstractScrollArea)
             admin_window.grab().save(str(artifact / f"admin-page-{page_index}.png"))
             for tabs in admin_window.pages.currentWidget().findChildren(QTabWidget):
                 for tab_index in range(tabs.count()):
                     tabs.setCurrentIndex(tab_index)
                     app.processEvents()
-                    assert_visible_buttons(admin_window, QPushButton)
+                    assert_visible_buttons(
+                        admin_window, QPushButton, QAbstractScrollArea
+                    )
                     for table in [
                         item
                         for item in tabs.currentWidget().findChildren(QTableWidget)
@@ -165,7 +168,7 @@ def main() -> int:
         assert not staff_window.findChildren(QShortcut), (
             "custom POS shortcuts are forbidden"
         )
-        assert_visible_buttons(staff_window, QPushButton)
+        assert_visible_buttons(staff_window, QPushButton, QAbstractScrollArea)
 
         # Fuzzy search, maximum three suggestions, mouse selection.
         staff_window.search.setFocus()
@@ -292,9 +295,22 @@ def main() -> int:
     return 0
 
 
-def assert_visible_buttons(window, button_type) -> None:
+def assert_visible_buttons(window, button_type, scroll_area_type) -> None:
     for button in window.findChildren(button_type):
         if not button.isVisible():
+            continue
+        ancestor = button.parentWidget()
+        clipped_by_scroll_area = False
+        while ancestor is not None:
+            if isinstance(ancestor, scroll_area_type):
+                viewport = ancestor.viewport()
+                top_left = button.mapTo(viewport, button.rect().topLeft())
+                button_rect = button.rect().translated(top_left)
+                if not viewport.rect().intersects(button_rect):
+                    clipped_by_scroll_area = True
+                    break
+            ancestor = ancestor.parentWidget()
+        if clipped_by_scroll_area:
             continue
         point = button.mapTo(window, button.rect().topLeft())
         rect = button.rect().translated(point)
