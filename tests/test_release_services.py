@@ -12,7 +12,7 @@ from cnkh_pos.services.auth import AuthService
 from cnkh_pos.services.backup import BackupService
 from cnkh_pos.services.catalog import CatalogService, ProductInput
 from cnkh_pos.services.daily_closing import DailyClosingService
-from cnkh_pos.services.held_orders import HeldOrderService
+from cnkh_pos.services.held_orders import HeldOrderService, cart_state_from_held_payload
 from cnkh_pos.services.printing import PrintingService
 from cnkh_pos.services.restore import RestoreService
 from cnkh_pos.services.sales import SaleLine, SalesService
@@ -62,6 +62,20 @@ class ReleaseServiceTests(unittest.TestCase):
         retrieved = service.retrieve_latest(cashier_id=self.admin)
         self.assertEqual(retrieved.hold_no, held.hold_no)
         self.assertEqual(retrieved.payload["items"][0]["quantity"], "2.5")
+
+    def test_retrieved_cart_omits_zero_discount_entries(self) -> None:
+        quantities, discounts = cart_state_from_held_payload(
+            {
+                "items": [
+                    {"product_id": 101, "quantity": "2", "discount_cents": 50},
+                    {"product_id": 202, "quantity": "1", "discount_cents": 0},
+                ]
+            }
+        )
+        self.assertEqual(
+            quantities, {101: Decimal("2"), 202: Decimal("1")}
+        )
+        self.assertEqual(discounts, {101: 50})
 
     def test_receipt_generation_and_reprint_lookup_do_not_change_sale_or_stock(
         self,

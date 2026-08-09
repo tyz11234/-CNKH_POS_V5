@@ -4,7 +4,7 @@
 
 Windows 离线 POS + Inventory 系统。V5 使用 **Python 3.12、PySide6 / Qt 6 与 SQLite**，不会覆盖或修改 V4 源代码。
 
-> 当前状态：Run #6 购物车数量控件修正候选版。已修正 Run #5 在 100% DPI 鼠标验收中的 `+/−` 控件重建定位问题，并让数量按钮直接修改购物车的权威数据。只有 Windows Release Gate 的自动测试、三档 DPI UI 验收、两个 EXE 自检和 Installer 构建全部通过，才可把对应 Artifact 当成可安装候选版。
+> 当前状态：Run #7 挂单折扣恢复修正候选版。已保留 Run #6 的购物车 `+/−` 修正，并让挂单恢复后的折扣资料继续采用只记录非零折扣的标准格式。只有 Windows Release Gate 的自动测试、三档 DPI UI 验收、两个 EXE 自检和 Installer 构建全部通过，才可把对应 Artifact 当成可安装候选版。
 
 ## 店铺电脑下载安装（不需要 Python）
 

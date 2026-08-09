@@ -31,7 +31,7 @@ from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.money import format_myr
 from cnkh_pos.services.product_search import search_products
 from cnkh_pos.services.sales import SaleLine, SalesService
-from cnkh_pos.services.held_orders import HeldOrderService
+from cnkh_pos.services.held_orders import HeldOrderService, cart_state_from_held_payload
 from cnkh_pos.services.printing import PrintingService
 from cnkh_pos.config import AppPaths
 from cnkh_pos.ui.dialogs.checkout import CheckoutDialog, SaleCompletedDialog
@@ -652,14 +652,9 @@ class StaffWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "Retrieve Order", str(exc))
             return
-        self.cart_quantities = {
-            int(item["product_id"]): Decimal(str(item["quantity"]))
-            for item in held.payload["items"]
-        }
-        self.cart_discounts = {
-            int(item["product_id"]): int(item.get("discount_cents", 0))
-            for item in held.payload["items"]
-        }
+        self.cart_quantities, self.cart_discounts = cart_state_from_held_payload(
+            held.payload
+        )
         self._rebuild_cart()
 
     def _print_sale(self, sale_id: int) -> None:

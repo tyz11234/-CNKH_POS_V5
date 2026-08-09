@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date
+from decimal import Decimal
 
 from cnkh_pos.database.connection import Database
 from cnkh_pos.database.migrations import utc_now_text
@@ -15,6 +16,36 @@ class HeldOrder:
     id: int
     hold_no: str
     payload: dict[str, object]
+
+
+def cart_state_from_held_payload(
+    payload: dict[str, object],
+) -> tuple[dict[int, Decimal], dict[int, int]]:
+    """Restore canonical cart state from a held-order payload.
+
+    Zero-value discounts are intentionally omitted.  The live cart uses a
+    sparse discount mapping, so adding ``product_id: 0`` entries while
+    retrieving an order would make the restored state differ from the state
+    that was held even though the payable total is unchanged.
+    """
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise ValueError("invalid held-order items")
+
+    quantities: dict[int, Decimal] = {}
+    discounts: dict[int, int] = {}
+    for item in items:
+        if not isinstance(item, dict):
+            raise ValueError("invalid held-order item")
+        product_id = int(item["product_id"])
+        quantity = Decimal(str(item["quantity"]))
+        discount_cents = int(item.get("discount_cents", 0))
+        if quantity <= 0 or discount_cents < 0:
+            raise ValueError("invalid held-order quantity or discount")
+        quantities[product_id] = quantity
+        if discount_cents:
+            discounts[product_id] = discount_cents
+    return quantities, discounts
 
 
 class HeldOrderService:
