@@ -1,0 +1,70 @@
+name: Windows Release Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+    tags: ["v5.*"]
+
+jobs:
+  test-build-package:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      PYTHONUTF8: "1"
+      QT_LOGGING_RULES: "qt.qpa.fonts.warning=false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-build.txt
+      - name: Compile Qt resources
+        run: pyside6-rcc resources/resources.qrc -o cnkh_pos/resources_rc.py
+      - name: Automated tests
+        run: pytest -q --disable-warnings --maxfail=1
+      - name: Source self-test
+        run: python tools/source_self_test.py
+      - name: Windows GUI acceptance 100 percent
+        env:
+          QT_SCALE_FACTOR: "1.0"
+        run: python tools/windows_gui_acceptance.py --scale 100
+      - name: Windows GUI acceptance 125 percent
+        env:
+          QT_SCALE_FACTOR: "1.25"
+        run: python tools/windows_gui_acceptance.py --scale 125
+      - name: Windows GUI acceptance 150 percent
+        env:
+          QT_SCALE_FACTOR: "1.5"
+        run: python tools/windows_gui_acceptance.py --scale 150
+      - name: Build Admin EXE
+        run: pyinstaller --noconfirm --clean build/admin.spec
+      - name: Build Staff EXE
+        run: pyinstaller --noconfirm --clean build/staff.spec
+      - name: Packaged Admin self-test
+        run: dist\CNKH_POS_Admin.exe --self-test
+      - name: Packaged Staff self-test
+        run: dist\CNKH_POS_Staff.exe --self-test
+      - name: Build Setup.exe
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) { choco install innosetup --no-progress -y }
+          iscc installer\CNKH_POS_V5.iss
+      - name: Release manifest
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist\*.exe, release\*.exe
+          $manifest = $files | ForEach-Object { [pscustomobject]@{ file=$_.Name; sha256=(Get-FileHash $_.FullName -Algorithm SHA256).Hash; bytes=$_.Length } }
+          $manifest | ConvertTo-Json | Set-Content release\release-manifest.json -Encoding UTF8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CNKH-Hardware-POS-V5-Windows
+          path: |
+            release/CNKH_Hardware_POS_V5_Setup.exe
+            release/release-manifest.json
+            ui-acceptance-artifacts/**
+          if-no-files-found: error

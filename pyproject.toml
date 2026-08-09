@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cnkh-pos-v5"
+version = "5.0.0-alpha.1"
+description = "Offline-first POS and inventory system for CNKH Hardware"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "PySide6>=6.8,<6.10",
+  "argon2-cffi>=23.1,<26",
+  "openpyxl>=3.1,<4",
+  "platformdirs>=4.3,<5",
+  "rapidfuzz>=3.10,<4",
+  "reportlab>=4.2,<5",
+]
+
+[project.optional-dependencies]
+build = ["pyinstaller>=6.11,<7"]
+test = ["pytest>=8.3,<9", "pytest-cov>=6,<7"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+pythonpath = ["."]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["cnkh_pos*"]
+
