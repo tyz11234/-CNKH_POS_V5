@@ -1,0 +1,37 @@
+CNKH Hardware POS V5 — Run #5 验证状态
+日期：2026-08-09
+
+本文件包包含 Run #5 最新源码、Windows Release Gate、PyInstaller 配置与
+Inno Setup 安装器配置。
+
+已通过：
+- 23/23 自动化数据库与业务测试
+- Database Migration / Supplier Payment / Sale / Inventory 测试
+- Python 源码语法检查
+- Source Self-Test（60 个 Python 文件，Schema 6）
+- 关键 Ruff 静态检查（E9、F63、F7、F82）
+
+Run #5 新增修复：
+- Staff 搜索商品与加入购物车按钮连接真实操作
+- Credit Sale 客户选择与必选验证
+- Payment Dialog 金额快捷设置按钮连接真实设置页面
+- Dashboard 改为显示真实数据库数据
+- Receipt Test Print 真实输出
+- Reports Export Excel 真实输出 XLSX
+- Restore 按钮连接真实文件选择、管理员密码验证和安全恢复
+- Stocktake 增加实际数量录入与库存调整界面
+- Windows GUI Acceptance 扩展为真实鼠标操作完整流程
+
+尚未在此 Linux 环境执行：
+- Windows 100% / 125% / 150% DPI GUI Acceptance
+- Run #5 Admin / Staff 打包后 EXE Self-Test
+- Run #5 Setup.exe 编译
+
+原因：当前运行环境缺少 Windows runner，并缺少 Linux libEGL.so.1；因此这份
+ZIP 是最新完整源码与构建包，但不能标记为最终 Windows 正式版。
+
+Windows 自动构建入口：
+.github/workflows/windows-release.yml
+
+工作流全部 PASS 后会生成：
+release/CNKH_Hardware_POS_V5_Setup.exe

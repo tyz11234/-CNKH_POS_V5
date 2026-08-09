@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import html
 from decimal import Decimal
 
 from PySide6.QtCore import Qt
@@ -12,6 +13,8 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QDoubleSpinBox,
@@ -106,15 +109,19 @@ class StaffWindow(QMainWindow):
             "扫描 / 输入条码、商品名称、SKU、Alias、Category、Location"
         )
         self.search.textChanged.connect(self._filter_results)
-        button = QPushButton("搜索商品")
-        button.setObjectName("PrimaryButton")
-        button.setMinimumHeight(50)
+        self.search_button = QPushButton("搜索商品")
+        self.search_button.setObjectName("PrimaryButton")
+        self.search_button.setMinimumHeight(50)
+        self.search_button.clicked.connect(
+            lambda: self._filter_results(self.search.text())
+        )
         layout.addWidget(self.search, 1)
-        layout.addWidget(button)
+        layout.addWidget(self.search_button)
         return layout
 
     def _search_results(self) -> QTableWidget:
         self.results = QTableWidget(0, 6)
+        self.results.setObjectName("SearchSuggestions")
         self.results.setHorizontalHeaderLabels(
             ["商品名称", "SKU", "Barcode", "售价", "库存", "单位"]
         )
@@ -130,7 +137,8 @@ class StaffWindow(QMainWindow):
             QAbstractItemView.SelectionBehavior.SelectRows
         )
         self.results.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.results.setMaximumHeight(146)
+        self.results.setMaximumHeight(190)
+        self.results.setVisible(False)
         self.results.cellClicked.connect(self._result_clicked)
         return self.results
 
@@ -141,6 +149,15 @@ class StaffWindow(QMainWindow):
         title = QLabel("商品列表")
         title.setObjectName("SectionTitle")
         layout.addWidget(title)
+        product_body = QHBoxLayout()
+        self.category_filter = QListWidget()
+        self.category_filter.setObjectName("ProductCategoryFilter")
+        self.category_filter.setMaximumWidth(145)
+        self.category_filter.setMinimumWidth(105)
+        self.category_filter.currentRowChanged.connect(
+            lambda _row: self._load_product_table()
+        )
+        product_body.addWidget(self.category_filter)
         self.products = QTableWidget(0, 6)
         self.products.setHorizontalHeaderLabels(
             ["商品名称", "SKU", "售价", "库存", "单位", "加入"]
@@ -154,7 +171,8 @@ class StaffWindow(QMainWindow):
             QAbstractItemView.SelectionBehavior.SelectRows
         )
         self.products.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        layout.addWidget(self.products, 1)
+        product_body.addWidget(self.products, 1)
+        layout.addLayout(product_body, 1)
         pager = QLabel("共 58 项商品        1    2    3    4    5    …    8    ›")
         pager.setObjectName("Muted")
         layout.addWidget(pager)
@@ -205,7 +223,10 @@ class StaffWindow(QMainWindow):
         ):
             button = QPushButton(text)
             button.setObjectName(name)
-            if text == "挂单":
+            if text == "加入购物车":
+                self.add_selected_button = button
+                button.clicked.connect(self._add_selected_product)
+            elif text == "挂单":
                 self.hold_button = button
             elif text == "恢复挂单":
                 self.retrieve_button = button
@@ -215,15 +236,18 @@ class StaffWindow(QMainWindow):
         layout.addLayout(secondary)
         discount = QPushButton("修改所选商品 Discount")
         discount.setObjectName("WarningButton")
+        self.discount_button = discount
         discount.clicked.connect(self._edit_discount)
         layout.addWidget(discount)
         self.hold_button.clicked.connect(self._hold_order)
         self.retrieve_button.clicked.connect(self._retrieve_order)
         reprint = QPushButton("重新打印上一张小票")
+        self.reprint_button = reprint
         reprint.clicked.connect(self._reprint_latest)
         layout.addWidget(reprint)
         checkout = QPushButton("结账   →")
         checkout.setObjectName("CheckoutButton")
+        self.checkout_button = checkout
         checkout.clicked.connect(self._checkout)
         layout.addWidget(checkout)
         return panel
@@ -237,6 +261,7 @@ class StaffWindow(QMainWindow):
     def _filter_results(self, query: str) -> None:
         self.results.setRowCount(0)
         if not query.strip():
+            self.results.setVisible(False)
             return
         conn = self.database.connect(readonly=True)
         try:
@@ -258,6 +283,12 @@ class StaffWindow(QMainWindow):
                 item = QTableWidgetItem(value)
                 item.setData(Qt.ItemDataRole.UserRole, result.product_id)
                 self.results.setItem(row, column, item)
+            highlighted = QLabel(self._highlight(result.name, query))
+            highlighted.setTextFormat(Qt.TextFormat.RichText)
+            highlighted.setContentsMargins(8, 0, 8, 0)
+            self.results.setCellWidget(row, 0, highlighted)
+            self.results.setRowHeight(row, 46)
+        self.results.setVisible(bool(matches))
         if len(matches) == 1 and matches[0].exact_barcode:
             self._add_to_cart(matches[0].product_id)
             self.search.clear()
@@ -267,6 +298,36 @@ class StaffWindow(QMainWindow):
         product_id = int(self.results.item(row, 0).data(Qt.ItemDataRole.UserRole))
         self._add_to_cart(product_id)
         self.search.clear()
+
+    @staticmethod
+    def _highlight(value: str, query: str) -> str:
+        safe = html.escape(value)
+        term = query.strip()
+        if not term:
+            return safe
+        lower_value = value.casefold()
+        lower_term = term.casefold()
+        start = lower_value.find(lower_term)
+        if start < 0:
+            return safe
+        before = html.escape(value[:start])
+        match = html.escape(value[start : start + len(term)])
+        after = html.escape(value[start + len(term) :])
+        return (
+            f"{before}<span style='color:#E5484D;font-weight:800;"
+            f"background:#FFF0F1'>{match}</span>{after}"
+        )
+
+    def _add_selected_product(self) -> None:
+        row = self.products.currentRow()
+        if 0 <= row < len(self.visible_product_ids):
+            self._add_to_cart(self.visible_product_ids[row])
+            return
+        result_row = self.results.currentRow()
+        if result_row >= 0 and self.results.item(result_row, 0) is not None:
+            self._result_clicked(result_row, 0)
+            return
+        QMessageBox.information(self, "Cart", "请先选择一个商品。")
 
     def _add_to_cart(self, product_id: int) -> None:
         self.cart_quantities[product_id] = self.cart_quantities.get(
@@ -279,7 +340,13 @@ class StaffWindow(QMainWindow):
         if not self.cart_quantities:
             QMessageBox.information(self, "Cart", "购物车是空的。")
             return
-        dialog = CheckoutDialog(total, self._quick_amounts(), self)
+        dialog = CheckoutDialog(
+            total,
+            self._quick_amounts(),
+            self,
+            customers=self._customers(),
+            quick_settings_callback=self._open_quick_amount_settings,
+        )
         if dialog.exec() != CheckoutDialog.DialogCode.Accepted:
             return
         try:
@@ -297,6 +364,7 @@ class StaffWindow(QMainWindow):
                 payment_method=dialog.payment_method,
                 paid_cents=dialog.paid_cents,
                 cashier_id=self.user.id,
+                customer_id=dialog.customer_id,
             )
         except Exception as exc:
             QMessageBox.critical(self, "Checkout", str(exc))
@@ -315,11 +383,27 @@ class StaffWindow(QMainWindow):
             self._print_sale(result.sale_id)
 
     def _load_product_table(self) -> None:
+        if not hasattr(self, "category_filter"):
+            return
+        if self.category_filter.count() == 0:
+            self._load_categories()
+        current_category = self.category_filter.currentItem()
+        category_id = (
+            current_category.data(Qt.ItemDataRole.UserRole)
+            if current_category is not None
+            else None
+        )
         conn = self.database.connect(readonly=True)
         try:
-            rows = conn.execute(
-                "SELECT id, name, COALESCE(sku,'') AS sku, selling_price_cents, stock_decimal, unit FROM products WHERE is_deleted=0 ORDER BY name COLLATE NOCASE LIMIT 100"
-            ).fetchall()
+            if category_id is None:
+                rows = conn.execute(
+                    "SELECT id, name, COALESCE(sku,'') AS sku, selling_price_cents, stock_decimal, unit FROM products WHERE is_deleted=0 ORDER BY name COLLATE NOCASE LIMIT 100"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT id, name, COALESCE(sku,'') AS sku, selling_price_cents, stock_decimal, unit FROM products WHERE is_deleted=0 AND category_id=? ORDER BY name COLLATE NOCASE LIMIT 100",
+                    (category_id,),
+                ).fetchall()
         finally:
             conn.close()
         self.products.setRowCount(len(rows))
@@ -342,6 +426,26 @@ class StaffWindow(QMainWindow):
                 lambda checked=False, pid=product_id: self._add_to_cart(pid)
             )
             self.products.setCellWidget(row_index, 5, add)
+
+    def _load_categories(self) -> None:
+        self.category_filter.blockSignals(True)
+        self.category_filter.clear()
+        all_item = QListWidgetItem("全部")
+        all_item.setData(Qt.ItemDataRole.UserRole, None)
+        self.category_filter.addItem(all_item)
+        conn = self.database.connect(readonly=True)
+        try:
+            rows = conn.execute(
+                "SELECT id,name FROM categories WHERE is_deleted=0 ORDER BY name COLLATE NOCASE"
+            ).fetchall()
+        finally:
+            conn.close()
+        for row in rows:
+            item = QListWidgetItem(str(row["name"]))
+            item.setData(Qt.ItemDataRole.UserRole, int(row["id"]))
+            self.category_filter.addItem(item)
+        self.category_filter.setCurrentRow(0)
+        self.category_filter.blockSignals(False)
 
     def _rebuild_cart(self) -> None:
         self.cart.setRowCount(0)
@@ -483,6 +587,29 @@ class StaffWindow(QMainWindow):
             ]
         finally:
             conn.close()
+
+    def _customers(self) -> list[tuple[int, str]]:
+        conn = self.database.connect(readonly=True)
+        try:
+            return [
+                (int(row["id"]), str(row["name"]))
+                for row in conn.execute(
+                    "SELECT id,name FROM customers WHERE is_deleted=0 ORDER BY name COLLATE NOCASE"
+                )
+            ]
+        finally:
+            conn.close()
+
+    def _open_quick_amount_settings(self) -> None:
+        from PySide6.QtWidgets import QDialog, QVBoxLayout
+        from cnkh_pos.ui.admin.settings_pages import QuickAmountsWidget
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("金额快捷按钮设置")
+        dialog.setMinimumSize(680, 460)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QuickAmountsWidget(self.database))
+        dialog.exec()
 
     def _hold_order(self) -> None:
         payload = {

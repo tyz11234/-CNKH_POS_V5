@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+import os
+from datetime import date, datetime
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -26,10 +27,11 @@ from PySide6.QtWidgets import (
 
 from cnkh_pos.database.connection import Database
 from cnkh_pos.database.migrations import utc_now_text
+from cnkh_pos.config import AppPaths
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.catalog import CategoryService
-from cnkh_pos.services.money import format_myr
 from cnkh_pos.services.daily_closing import DailyClosingService
+from cnkh_pos.services.money import format_myr
 
 
 class CategoryDialog(QDialog):
@@ -282,8 +284,11 @@ class ReceiptSettingsWidget(QWidget):
         save = QPushButton("保存 Receipt Settings")
         save.setObjectName("SuccessButton")
         save.clicked.connect(self.save)
+        self.save_button = save
         test = QPushButton("Test Print")
         test.setObjectName("PrimaryButton")
+        test.clicked.connect(self.test_print)
+        self.test_button = test
         form.addRow(save, test)
         root.addLayout(form, 3)
         preview_box = QVBoxLayout()
@@ -319,6 +324,32 @@ class ReceiptSettingsWidget(QWidget):
                 "INSERT OR REPLACE INTO settings(key,value_json,updated_at,updated_by) VALUES ('receipt',?,?,?)",
                 (json.dumps(value, ensure_ascii=False), utc_now_text(), self.user.id),
             )
+
+    def test_print(self) -> None:
+        from PySide6.QtCore import QSizeF
+        from PySide6.QtGui import QPageSize, QTextDocument
+        from PySide6.QtPrintSupport import QPrinter
+
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setPageSize(
+            QPageSize(QSizeF(80, 297), QPageSize.Unit.Millimeter, "80mm")
+        )
+        test_pdf = os.environ.get("CNKH_POS_TEST_PRINT_PDF")
+        output_path = None
+        if test_pdf:
+            paths = AppPaths.default()
+            paths.ensure_directories()
+            output_path = paths.exports / "receipt-settings-test.pdf"
+            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+            printer.setOutputFileName(str(output_path))
+        document = QTextDocument()
+        document.setPlainText(self.preview.toPlainText())
+        document.print_(printer)
+        QMessageBox.information(
+            self,
+            "Test Print",
+            f"测试小票已输出：{output_path}" if output_path else "测试小票已发送到默认打印机。",
+        )
 
 
 class SettingsPage(QWidget):
@@ -407,6 +438,7 @@ class DailyClosingPage(QWidget):
 class ReportsPage(QWidget):
     def __init__(self, database: Database):
         super().__init__()
+        self.database = database
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 20)
         title = QLabel("Reports / Monthly Summary")
@@ -417,6 +449,8 @@ class ReportsPage(QWidget):
         root.addWidget(self.summary)
         export = QPushButton("Export Excel")
         export.setObjectName("PrimaryButton")
+        export.clicked.connect(self.export_excel)
+        self.export_button = export
         root.addWidget(export, alignment=Qt.AlignmentFlag.AlignLeft)
         root.addStretch(1)
         conn = database.connect(readonly=True)
@@ -438,3 +472,67 @@ class ReportsPage(QWidget):
         self.summary.setText(
             f"Sales: {format_myr(int(sales))}\nGross Profit: {format_myr(int(profit))}\nTransaction Count: {count}\nPurchases: {format_myr(int(purchases))}\nCustomer Receivables: {format_myr(int(receivable))}\nSupplier Payables: {format_myr(int(payable))}"
         )
+
+    def export_excel(self) -> None:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+
+        paths = AppPaths.default()
+        paths.ensure_directories()
+        target = paths.exports / f"CNKH_POS_Report_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
+        workbook = Workbook()
+        summary = workbook.active
+        summary.title = "Summary"
+        summary.append(["CNKH Hardware POS V5", "Monthly Summary"])
+        for line in self.summary.text().splitlines():
+            label, _, value = line.partition(":")
+            summary.append([label, value.strip()])
+        summary["A1"].font = Font(bold=True, color="FFFFFF")
+        summary["B1"].font = Font(bold=True, color="FFFFFF")
+        summary["A1"].fill = PatternFill("solid", fgColor="0B2A53")
+        summary["B1"].fill = PatternFill("solid", fgColor="0B2A53")
+        summary.column_dimensions["A"].width = 28
+        summary.column_dimensions["B"].width = 24
+
+        conn = self.database.connect(readonly=True)
+        try:
+            datasets = (
+                (
+                    "Sales",
+                    ["Receipt No", "Sold At", "Total (sen)", "Payment", "Customer"],
+                    """SELECT s.receipt_no,s.sold_at,s.total_cents,s.payment_method,
+                              COALESCE(c.name,'Walk-In Customer')
+                       FROM sales s LEFT JOIN customers c ON c.id=s.customer_id
+                       WHERE s.is_deleted=0 ORDER BY s.sold_at DESC""",
+                ),
+                (
+                    "Purchases",
+                    ["Purchase No", "Purchased At", "Total (sen)", "Paid (sen)", "Status"],
+                    """SELECT purchase_no,purchased_at,total_cents,paid_cents,status
+                       FROM purchases WHERE is_deleted=0 ORDER BY purchased_at DESC""",
+                ),
+                (
+                    "Customer Debts",
+                    ["Customer", "Original (sen)", "Balance (sen)", "Status", "Opened At"],
+                    """SELECT c.name,d.original_cents,d.balance_cents,d.status,d.opened_at
+                       FROM customer_debts d JOIN customers c ON c.id=d.customer_id
+                       ORDER BY d.opened_at DESC""",
+                ),
+            )
+            for name, headers, query in datasets:
+                sheet = workbook.create_sheet(name)
+                sheet.append(headers)
+                for cell in sheet[1]:
+                    cell.font = Font(bold=True, color="FFFFFF")
+                    cell.fill = PatternFill("solid", fgColor="1769E0")
+                for row in conn.execute(query):
+                    sheet.append(list(row))
+                sheet.freeze_panes = "A2"
+                sheet.auto_filter.ref = sheet.dimensions
+                for column in sheet.columns:
+                    width = min(42, max(12, max(len(str(cell.value or "")) for cell in column) + 2))
+                    sheet.column_dimensions[column[0].column_letter].width = width
+        finally:
+            conn.close()
+        workbook.save(target)
+        QMessageBox.information(self, "Export Excel", f"报表已导出：{target}")

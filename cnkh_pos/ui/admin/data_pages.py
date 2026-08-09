@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -30,6 +32,7 @@ from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.backup import BackupService
 from cnkh_pos.services.catalog import CatalogService, ProductInput
 from cnkh_pos.services.money import rm_to_cents
+from cnkh_pos.services.restore import RestoreService
 from cnkh_pos.services.stocktake import StocktakeService
 from cnkh_pos.services.purchases import PurchaseLine, PurchaseService
 from cnkh_pos.services.payments import CustomerPaymentService, SupplierPaymentService
@@ -532,6 +535,94 @@ class EntityPage(PagedTablePage):
             QMessageBox.warning(self, "Payment", str(exc))
 
 
+class StocktakeCountDialog(QDialog):
+    def __init__(self, database: Database, stocktake_id: int, parent=None):
+        super().__init__(parent)
+        self.database = database
+        self.stocktake_id = stocktake_id
+        self.original_counts: dict[int, Decimal] = {}
+        self.setWindowTitle("Stock Adjustment / 盘点数量")
+        self.setMinimumSize(920, 620)
+        root = QVBoxLayout(self)
+        title = QLabel("输入实际盘点数量；完成盘点后才会调整库存。")
+        title.setObjectName("SectionTitle")
+        root.addWidget(title)
+        self.table = QTableWidget(0, 7)
+        self.table.setObjectName("StocktakeCountTable")
+        self.table.setHorizontalHeaderLabels(
+            ["Product ID", "商品", "System", "Physical", "Variance", "Unit", "Location"]
+        )
+        self.table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
+        )
+        self.table.verticalHeader().setVisible(False)
+        root.addWidget(self.table, 1)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Save
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.save)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+        self._load()
+
+    def _load(self) -> None:
+        conn = self.database.connect(readonly=True)
+        try:
+            rows = conn.execute(
+                """SELECT product_id,product_name_snapshot,system_stock_decimal,
+                          physical_count_decimal,variance_decimal,unit_snapshot,location_snapshot
+                   FROM stocktake_items WHERE stocktake_id=?
+                   ORDER BY product_name_snapshot COLLATE NOCASE""",
+                (self.stocktake_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+        self.table.setRowCount(len(rows))
+        for row_index, row in enumerate(rows):
+            product_id = int(row["product_id"])
+            physical = Decimal(str(row["physical_count_decimal"]))
+            self.original_counts[product_id] = physical
+            values = (
+                product_id,
+                row["product_name_snapshot"],
+                row["system_stock_decimal"],
+                "",
+                row["variance_decimal"],
+                row["unit_snapshot"],
+                row["location_snapshot"],
+            )
+            for column, value in enumerate(values):
+                self.table.setItem(row_index, column, QTableWidgetItem(str(value)))
+            control = QDoubleSpinBox()
+            control.setObjectName("PhysicalCountInput")
+            control.setDecimals(3)
+            control.setRange(0, 999999999)
+            control.setValue(float(physical))
+            control.valueChanged.connect(
+                lambda value, row_no=row_index, system=Decimal(
+                    str(row["system_stock_decimal"])
+                ): self.table.item(row_no, 4).setText(
+                    str(Decimal(str(value)) - system)
+                )
+            )
+            self.table.setCellWidget(row_index, 3, control)
+
+    def save(self) -> None:
+        service = StocktakeService(self.database)
+        for row in range(self.table.rowCount()):
+            product_id = int(self.table.item(row, 0).text())
+            control = self.table.cellWidget(row, 3)
+            physical = Decimal(str(control.value()))
+            if physical != self.original_counts[product_id]:
+                service.set_physical_count(
+                    stocktake_id=self.stocktake_id,
+                    product_id=product_id,
+                    count=physical,
+                )
+        self.accept()
+
+
 class StocktakePage(PagedTablePage):
     def __init__(self, database: Database, user: AuthenticatedUser):
         self.user = user
@@ -541,6 +632,7 @@ class StocktakePage(PagedTablePage):
             ["ID", "Stocktake No", "开始", "完成", "商品数", "差异", "状态"],
         )
         self.add_action("＋ 新建盘点", self.create, style="PrimaryButton")
+        self.add_action("盘点数量 / 库存调整", self.edit_counts, style="WarningButton")
         self.add_action("完成盘点", self.complete, style="SuccessButton")
         self.add_action("刷新", self.refresh)
         self.refresh()
@@ -559,6 +651,15 @@ class StocktakePage(PagedTablePage):
     def create(self) -> None:
         StocktakeService(self.database).create_draft(operator_id=self.user.id)
         self.refresh()
+
+    def edit_counts(self) -> None:
+        stocktake_id = self.selected_id()
+        if stocktake_id is None:
+            QMessageBox.information(self, "Stocktake", "请先选择草稿盘点。")
+            return
+        dialog = StocktakeCountDialog(self.database, stocktake_id, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.refresh()
 
     def complete(self) -> None:
         stocktake_id = self.selected_id()
@@ -596,9 +697,10 @@ class AuditPage(PagedTablePage):
 
 
 class MaintenancePage(QWidget):
-    def __init__(self, database: Database):
+    def __init__(self, database: Database, user: AuthenticatedUser):
         super().__init__()
         self.database = database
+        self.user = user
         root = QVBoxLayout(self)
         root.setContentsMargins(22, 20, 22, 20)
         title = QLabel("数据维护")
@@ -608,15 +710,18 @@ class MaintenancePage(QWidget):
         self.info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         root.addWidget(self.info)
         buttons = QHBoxLayout()
+        self.action_buttons: dict[str, QPushButton] = {}
         for text, callback, style in (
             ("Run Integrity Check", self.integrity, "PrimaryButton"),
             ("Backup", self.backup, "SuccessButton"),
-            ("Restore", self.restore_info, "WarningButton"),
-            ("Open Error Log Folder", self.open_log_info, ""),
+            ("Restore", self.restore, "WarningButton"),
+            ("Open Error Log Folder", self.open_log_folder, ""),
         ):
             button = QPushButton(text)
             button.setObjectName(style)
+            button.setProperty("acceptanceName", text.replace(" ", ""))
             button.clicked.connect(callback)
+            self.action_buttons[text] = button
             buttons.addWidget(button)
         root.addLayout(buttons)
         root.addStretch(1)
@@ -651,12 +756,42 @@ class MaintenancePage(QWidget):
         )
         QMessageBox.information(self, "Backup", str(result.path))
 
-    def restore_info(self) -> None:
-        QMessageBox.information(
+    def restore(self) -> None:
+        backup_path, _ = QFileDialog.getOpenFileName(
             self,
-            "Restore",
-            "Restore 必须验证当前 Admin Password，并在替换前再次建立安全备份。",
+            "Select CNKH POS Backup",
+            str(AppPaths.default().backups),
+            "SQLite Backup (*.db);;All Files (*)",
+            options=QFileDialog.Option.DontUseNativeDialog,
+        )
+        if not backup_path:
+            return
+        password, ok = QInputDialog.getText(
+            self,
+            "Admin Verification",
+            "Current Admin Password",
+            QLineEdit.EchoMode.Password,
+        )
+        if not ok:
+            return
+        try:
+            safety = RestoreService(
+                self.database, AppPaths.default().backups
+            ).restore(
+                backup_path,
+                admin_id=self.user.id,
+                password=password,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Restore", str(exc))
+            return
+        self.refresh()
+        QMessageBox.information(
+            self, "Restore", f"恢复成功。替换前安全备份：{safety}"
         )
 
-    def open_log_info(self) -> None:
-        QMessageBox.information(self, "Error Log", str(AppPaths.default().logs))
+    def open_log_folder(self) -> None:
+        paths = AppPaths.default()
+        paths.ensure_directories()
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.logs))):
+            QMessageBox.information(self, "Error Log", str(paths.logs))

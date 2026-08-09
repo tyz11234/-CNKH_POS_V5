@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
     QDialog,
     QGridLayout,
     QHBoxLayout,
@@ -19,16 +20,23 @@ class CheckoutDialog(QDialog):
     """Large mouse-first payment dialog. Committing a sale belongs to SalesService."""
 
     def __init__(
-        self, total_cents: int, quick_amounts: list[int] | None = None, parent=None
+        self,
+        total_cents: int,
+        quick_amounts: list[int] | None = None,
+        parent=None,
+        *,
+        customers: list[tuple[int, str]] | None = None,
+        quick_settings_callback=None,
     ):
         super().__init__(parent)
         self.total_cents = total_cents
         self.paid_cents = 0
         self.payment_method = "CASH"
+        self.customer_id: int | None = None
         self.setWindowTitle("结账 / 收款")
         self.setModal(True)
-        self.setMinimumSize(560, 650)
-        self.resize(600, 700)
+        self.setMinimumSize(430, 620)
+        self.resize(470, 660)
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(12)
@@ -63,6 +71,7 @@ class CheckoutDialog(QDialog):
             )
         ):
             button = QPushButton(label)
+            button.setObjectName(f"PaymentMethod{value}")
             button.setCheckable(True)
             button.setProperty("paymentMethod", value)
             self.method_group.addButton(button)
@@ -71,10 +80,26 @@ class CheckoutDialog(QDialog):
                 button.setChecked(True)
         root.addLayout(methods)
 
+        self.customer_caption = self._caption("Credit Customer / 欠账客户")
+        self.customer = QComboBox()
+        self.customer.setObjectName("CreditCustomer")
+        self.customer.addItem("请选择客户", None)
+        for customer_id, name in customers or []:
+            self.customer.addItem(name, customer_id)
+        self.customer_caption.hide()
+        self.customer.hide()
+        root.addWidget(self.customer_caption)
+        root.addWidget(self.customer)
+        self.method_group.buttonToggled.connect(self._method_changed)
+
         quick_header = QHBoxLayout()
         quick_header.addWidget(self._caption("快捷金额"))
         quick_header.addStretch(1)
         settings = QPushButton("⚙ 设置")
+        settings.setObjectName("QuickAmountSettingsButton")
+        self.settings_button = settings
+        if quick_settings_callback is not None:
+            settings.clicked.connect(quick_settings_callback)
         quick_header.addWidget(settings)
         root.addLayout(quick_header)
         quick_grid = QGridLayout()
@@ -102,9 +127,12 @@ class CheckoutDialog(QDialog):
 
         actions = QHBoxLayout()
         cancel = QPushButton("取消")
+        cancel.setObjectName("PaymentCancelButton")
         cancel.clicked.connect(self.reject)
         confirm = QPushButton("确认收款")
         confirm.setObjectName("SuccessButton")
+        confirm.setProperty("acceptanceName", "PaymentConfirmButton")
+        self.confirm_button = confirm
         confirm.setMinimumHeight(54)
         confirm.clicked.connect(self._confirm)
         actions.addWidget(cancel)
@@ -120,6 +148,18 @@ class CheckoutDialog(QDialog):
     def _set_paid(self, cents: int) -> None:
         self.paid_input.setText(f"{cents / 100:.2f}")
 
+    def _method_changed(self, button: QPushButton, checked: bool) -> None:
+        if not checked:
+            return
+        method = str(button.property("paymentMethod"))
+        is_credit = method == "CREDIT"
+        self.customer_caption.setVisible(is_credit)
+        self.customer.setVisible(is_credit)
+        if method in {"CARD", "DUITNOW_QR"}:
+            self._set_paid(self.total_cents)
+        elif is_credit:
+            self.paid_input.setText("0.00")
+
     def _update_change(self, value: str) -> None:
         cleaned = value.upper().replace("RM", "").replace(",", "").strip()
         try:
@@ -134,6 +174,16 @@ class CheckoutDialog(QDialog):
         self.payment_method = (
             str(selected.property("paymentMethod")) if selected else "CASH"
         )
+        self.customer_id = (
+            int(self.customer.currentData())
+            if self.payment_method == "CREDIT"
+            and self.customer.currentData() is not None
+            else None
+        )
+        if self.payment_method == "CREDIT" and self.customer_id is None:
+            self.customer.setFocus()
+            self.customer.setStyleSheet("border:2px solid #E5484D;")
+            return
         cleaned = (
             self.paid_input.text().upper().replace("RM", "").replace(",", "").strip()
         )
@@ -187,9 +237,13 @@ class SaleCompletedDialog(QDialog):
         actions = QHBoxLayout()
         print_button = QPushButton("打印小票")
         print_button.setObjectName("SuccessButton")
+        print_button.setProperty("acceptanceName", "PrintReceiptButton")
         print_button.clicked.connect(self._request_print)
+        self.print_button = print_button
         skip = QPushButton("暂不打印")
+        skip.setObjectName("SkipPrintButton")
         skip.clicked.connect(self.accept)
+        self.skip_button = skip
         actions.addWidget(print_button)
         actions.addWidget(skip)
         layout.addLayout(actions)

@@ -40,16 +40,16 @@ class StatCard(Card):
         layout.setSpacing(4)
         title_label = QLabel(title)
         title_label.setObjectName("StatLabel")
-        value_label = QLabel(value)
-        value_label.setObjectName(
+        self.value_label = QLabel(value)
+        self.value_label.setObjectName(
             {
                 "success": "StatValueSuccess",
                 "warning": "StatValueWarning",
                 "danger": "StatValueDanger",
             }.get(tone, "StatValue")
         )
-        detail_label = QLabel(detail)
-        detail_label.setObjectName("Muted")
+        self.detail_label = QLabel(detail)
+        self.detail_label.setObjectName("Muted")
         layout.addWidget(title_label)
-        layout.addWidget(value_label)
-        layout.addWidget(detail_label)
+        layout.addWidget(self.value_label)
+        layout.addWidget(self.detail_label)

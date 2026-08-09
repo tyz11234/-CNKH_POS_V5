@@ -67,6 +67,24 @@ QPushButton#QuickAmountButton {
   color: #164D9D; background: #F7FAFF; border: 1px solid #73A1DF;
   min-height: 38px; font-weight: 700;
 }
+QPushButton[paymentMethod="CASH"]:checked,
+QPushButton[paymentMethod="CARD"]:checked,
+QPushButton[paymentMethod="DUITNOW_QR"]:checked,
+QPushButton[paymentMethod="CREDIT"]:checked {
+  color: white; background: #1769E0; border-color: #1769E0;
+}
+QListWidget#ProductCategoryFilter {
+  background: #F7F9FC; border: 0; border-radius: 8px; padding: 4px;
+}
+QListWidget#ProductCategoryFilter::item {
+  min-height: 35px; padding: 0 10px; border-radius: 6px; font-weight: 650;
+}
+QListWidget#ProductCategoryFilter::item:selected {
+  color: white; background: #1769E0;
+}
+QTableWidget#SearchSuggestions {
+  border: 1px solid #B9C9DE; border-radius: 10px;
+}
 QTableView, QTableWidget, QListView, QListWidget, QTreeView {
   background: white; alternate-background-color: #F8FAFD; border: 1px solid #DCE3EC;
   border-radius: 8px; gridline-color: #E8EDF4; selection-background-color: #E7F0FF;
@@ -81,4 +99,3 @@ QScrollBar:vertical { background: transparent; width: 11px; margin: 2px; }
 QScrollBar::handle:vertical { background: #B7C3D3; border-radius: 4px; min-height: 28px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QDialogButtonBox QPushButton { min-width: 100px; }
-

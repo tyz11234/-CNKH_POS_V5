@@ -53,7 +53,7 @@ class AdminWindow(QMainWindow):
         )
         self.pages = QStackedWidget()
         self.page_keys: dict[str, int] = {}
-        self._add_page("dashboard", DashboardPage())
+        self._add_page("dashboard", DashboardPage(database))
         catalog_tabs = QTabWidget()
         catalog_tabs.addTab(ProductsPage(database, user), "Products / 商品")
         catalog_tabs.addTab(StocktakePage(database, user), "Stocktake / 盘点")
@@ -68,7 +68,7 @@ class AdminWindow(QMainWindow):
         self._add_page("reports", report_tabs)
         self._add_page("settings", SettingsPage(database, user))
         maintenance_tabs = QTabWidget()
-        maintenance_tabs.addTab(MaintenancePage(database), "Data Maintenance")
+        maintenance_tabs.addTab(MaintenancePage(database, user), "Data Maintenance")
         maintenance_tabs.addTab(AuditPage(database), "Audit Log")
         self._add_page("maintenance", maintenance_tabs)
         sidebar.page_selected.connect(self._select_page)

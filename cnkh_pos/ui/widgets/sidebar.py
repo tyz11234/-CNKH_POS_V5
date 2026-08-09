@@ -43,6 +43,7 @@ class Sidebar(QFrame):
         for index, (key, text) in enumerate(items):
             button = QPushButton(f"  {text}")
             button.setObjectName("SidebarButton")
+            button.setProperty("pageKey", key)
             button.setCheckable(True)
             button.clicked.connect(
                 lambda checked=False, page=key: self.page_selected.emit(page)
