@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+.testdeps/
+build/
+dist/
+*.spec.bak
+*.db
+*.db-shm
+*.db-wal
+Backups/
+logs/
+release/
