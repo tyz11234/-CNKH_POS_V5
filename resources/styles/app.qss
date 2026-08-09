@@ -1,0 +1,84 @@
+/* CNKH Hardware POS V5 — shared Qt 6 design tokens */
+* {
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Noto Sans CJK SC", sans-serif;
+  color: #10213A;
+  font-size: 13px;
+}
+QMainWindow, QDialog, QWidget#AppCanvas { background: #F3F6FA; }
+QToolTip {
+  background: #10213A; color: white; border: 0; border-radius: 5px; padding: 6px;
+}
+QFrame#Sidebar { background: #071B36; border: 0; }
+QLabel#BrandTitle { color: white; font-size: 20px; font-weight: 800; }
+QLabel#BrandSubtitle { color: #AFC2DB; font-size: 10px; font-weight: 600; }
+QLabel#BrandVersion {
+  color: #C8D6E8; background: #16395F; border: 1px solid #315578;
+  border-radius: 8px; padding: 2px 8px;
+}
+QPushButton#SidebarButton {
+  color: #DCE7F5; background: transparent; border: 0; border-radius: 8px;
+  min-height: 42px; padding: 0 14px; text-align: left; font-weight: 600;
+}
+QPushButton#SidebarButton:hover { background: #123A66; color: white; }
+QPushButton#SidebarButton:checked { background: #1769E0; color: white; }
+QFrame#TopBar { background: #081F3D; border: 0; }
+QLabel#TopBarTitle { color: white; font-size: 17px; font-weight: 700; }
+QLabel#TopBarMeta { color: #C3D2E5; }
+QLabel#PageTitle { font-size: 21px; font-weight: 800; color: #10213A; }
+QLabel#SectionTitle { font-size: 14px; font-weight: 700; }
+QLabel#Muted { color: #68768A; }
+QFrame#Card, QFrame#StatCard, QFrame#Panel {
+  background: white; border: 1px solid #DCE3EC; border-radius: 12px;
+}
+QLabel#StatLabel { color: #3C485B; font-size: 12px; font-weight: 600; }
+QLabel#StatValue { color: #1769E0; font-size: 23px; font-weight: 800; }
+QLabel#StatValueSuccess { color: #168A3F; font-size: 23px; font-weight: 800; }
+QLabel#StatValueWarning { color: #D97706; font-size: 23px; font-weight: 800; }
+QLabel#StatValueDanger { color: #D92D3C; font-size: 23px; font-weight: 800; }
+QLabel#MoneyHero { color: #102E64; font-size: 35px; font-weight: 900; }
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QTextEdit {
+  background: white; border: 1px solid #C9D3E1; border-radius: 8px;
+  min-height: 38px; padding: 0 11px; selection-background-color: #1769E0;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+  border: 2px solid #1769E0;
+}
+QLineEdit#SearchInput { min-height: 48px; font-size: 17px; padding-left: 16px; }
+QLineEdit#PaymentInput { min-height: 54px; font-size: 24px; font-weight: 700; }
+QPushButton {
+  background: #EEF3FA; border: 1px solid #D2DCE8; border-radius: 8px;
+  min-height: 38px; padding: 0 15px; font-weight: 650;
+}
+QPushButton:hover { background: #E4EBF5; border-color: #A9B8CB; }
+QPushButton:pressed { background: #D8E3F0; }
+QPushButton:disabled { color: #9AA6B5; background: #EFF2F6; }
+QPushButton#PrimaryButton { background: #1769E0; color: white; border: 0; }
+QPushButton#PrimaryButton:hover { background: #0F5CCB; }
+QPushButton#SuccessButton { background: #16A34A; color: white; border: 0; }
+QPushButton#SuccessButton:hover { background: #12833D; }
+QPushButton#WarningButton { background: #F59E0B; color: white; border: 0; }
+QPushButton#DangerButton { background: #E5484D; color: white; border: 0; }
+QPushButton#CheckoutButton {
+  background: #18A84B; color: white; border: 0; border-radius: 10px;
+  min-height: 90px; font-size: 25px; font-weight: 900;
+}
+QPushButton#CheckoutButton:hover { background: #128B3D; }
+QPushButton#QuickAmountButton {
+  color: #164D9D; background: #F7FAFF; border: 1px solid #73A1DF;
+  min-height: 38px; font-weight: 700;
+}
+QTableView, QTableWidget, QListView, QListWidget, QTreeView {
+  background: white; alternate-background-color: #F8FAFD; border: 1px solid #DCE3EC;
+  border-radius: 8px; gridline-color: #E8EDF4; selection-background-color: #E7F0FF;
+  selection-color: #10213A; outline: 0;
+}
+QHeaderView::section {
+  background: #F3F6FA; color: #536074; border: 0; border-bottom: 1px solid #DCE3EC;
+  padding: 9px 8px; font-weight: 700;
+}
+QTableView::item, QTableWidget::item { padding: 8px; }
+QScrollBar:vertical { background: transparent; width: 11px; margin: 2px; }
+QScrollBar::handle:vertical { background: #B7C3D3; border-radius: 4px; min-height: 28px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QDialogButtonBox QPushButton { min-width: 100px; }
+

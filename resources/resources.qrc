@@ -1,0 +1,16 @@
+<RCC>
+  <qresource prefix="/cnkh">
+    <file alias="styles/app.qss">styles/app.qss</file>
+    <file alias="icons/home.svg">icons/home.svg</file>
+    <file alias="icons/box.svg">icons/box.svg</file>
+    <file alias="icons/cart.svg">icons/cart.svg</file>
+    <file alias="icons/users.svg">icons/users.svg</file>
+    <file alias="icons/settings.svg">icons/settings.svg</file>
+    <file alias="icons/database.svg">icons/database.svg</file>
+    <file alias="icons/chart.svg">icons/chart.svg</file>
+    <file alias="icons/search.svg">icons/search.svg</file>
+    <file alias="icons/trash.svg">icons/trash.svg</file>
+    <file alias="icons/printer.svg">icons/printer.svg</file>
+  </qresource>
+</RCC>
+
