@@ -1,0 +1,28 @@
+CNKH Hardware POS V5 — Run #6 购物车数量修正版验证状态
+日期：2026-08-09
+版本：5.0.0-alpha.2
+
+本文件包是 Run #6 本地修正版，未连接、读取或修改用户的 GitHub。
+
+本次修正：
+- 购物车 `+/−` 按钮改为按商品 ID 直接修改购物车中的当前数量。
+- 按钮不再从可能在界面重建时失效的旧 SpinBox 读取数量。
+- 购物车数量控件增加稳定的名称与商品 ID 属性。
+- Windows GUI Acceptance 每次重建后都按商品 ID 重新获取当前控件。
+- 验收会同时核对界面显示数值和购物车内部数量，不再依赖按钮列表的返回顺序。
+
+已在当前环境通过：
+- 23/23 自动化数据库与业务测试
+- Source Self-Test（60 个 Python 文件，Schema 6）
+- 关键 Ruff 静态检查（E9、F63、F7、F82）
+- Python 源码编译检查
+
+当前环境无法执行：
+- Windows 100% / 125% / 150% DPI GUI Acceptance
+- Admin / Staff Windows EXE 打包后 Self-Test
+- Setup.exe 编译
+
+原因：当前环境不是 Windows，并缺少 Qt 启动所需的 libEGL.so.1。
+因此本 ZIP 是已通过本地测试的完整修正源码包，不是已验收的 Windows 安装版。
+
+不得把任何 Run #4 或 Run #5 的旧 Setup.exe 当作此修正版。

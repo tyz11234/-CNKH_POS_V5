@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cnkh-pos-v5"
-version = "5.0.0-alpha.1"
+version = "5.0.0-alpha.2"
 description = "Offline-first POS and inventory system for CNKH Hardware"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -29,4 +29,3 @@ pythonpath = ["."]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["cnkh_pos*"]
-

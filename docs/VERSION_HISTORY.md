@@ -1,5 +1,13 @@
 # Version History
 
+## 5.0.0-alpha.2 — 2026-08-09
+
+### Fixed
+
+- 购物车 `+/−` 按钮现在直接以购物车数据中的当前数量加减，不再依赖会在列表重建时失效的旧 SpinBox。
+- Windows GUI Acceptance 现在依商品 ID 重新定位购物车数量控件，并同时核对 UI 数值与购物车数据。
+- `+/−` 验收不再依赖 Qt `findChildren()` 的按钮返回顺序。
+
 ## 5.0.0-alpha.1 — 2026-08-09
 
 ### New

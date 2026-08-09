@@ -164,6 +164,25 @@ def main() -> int:
             control.setValue(control.maximum() if value is None else value)
             dialog.accept()
 
+        def cart_quantity_controls(
+            window: StaffWindow, product_id: int
+        ) -> tuple[QDoubleSpinBox, QPushButton, QPushButton]:
+            """Resolve controls from the current cart tree after every rebuild."""
+            for row in range(window.cart.rowCount()):
+                item = window.cart.item(row, 0)
+                if item is None:
+                    continue
+                if int(item.data(Qt.ItemDataRole.UserRole)) != product_id:
+                    continue
+                cell = window.cart.cellWidget(row, 2)
+                assert cell is not None
+                spin = cell.findChild(QDoubleSpinBox, "CartQuantityValue")
+                minus = cell.findChild(QPushButton, "CartQuantityMinus")
+                plus = cell.findChild(QPushButton, "CartQuantityPlus")
+                assert spin is not None and minus is not None and plus is not None
+                return spin, minus, plus
+            raise AssertionError(f"cart row not found for product {product_id}")
+
         admin_window = AdminWindow(database, admin)
         admin_window.resize(1366, 768)
         admin_window.show()
@@ -260,20 +279,26 @@ def main() -> int:
         assert sum(staff_window.cart_quantities.values()) == initial_units + 2
 
         # Mouse quantity +/- controls and discount state.
-        spin = staff_window.cart.findChild(QDoubleSpinBox)
-        assert spin is not None
-        quantity_cell = spin.parentWidget()
-        quantity_buttons = quantity_cell.findChildren(QPushButton)
-        assert len(quantity_buttons) == 2
-        before_plus = spin.value()
-        QTest.mouseClick(quantity_buttons[1], Qt.MouseButton.LeftButton)
+        first_cart_item = staff_window.cart.item(0, 0)
+        assert first_cart_item is not None
+        cart_product_id = int(first_cart_item.data(Qt.ItemDataRole.UserRole))
+        spin, _minus, plus = cart_quantity_controls(staff_window, cart_product_id)
+        before_plus = Decimal(str(spin.value()))
+        QTest.mouseClick(plus, Qt.MouseButton.LeftButton)
         app.processEvents()
-        rebuilt_spin = staff_window.cart.findChild(QDoubleSpinBox)
-        assert rebuilt_spin is not None and rebuilt_spin.value() == before_plus + 1
-        rebuilt_buttons = rebuilt_spin.parentWidget().findChildren(QPushButton)
-        assert len(rebuilt_buttons) == 2
-        QTest.mouseClick(rebuilt_buttons[0], Qt.MouseButton.LeftButton)
+        rebuilt_spin, rebuilt_minus, _rebuilt_plus = cart_quantity_controls(
+            staff_window, cart_product_id
+        )
+        expected_plus = before_plus + Decimal("1")
+        assert staff_window.cart_quantities[cart_product_id] == expected_plus
+        assert Decimal(str(rebuilt_spin.value())) == expected_plus
+        QTest.mouseClick(rebuilt_minus, Qt.MouseButton.LeftButton)
         app.processEvents()
+        restored_spin, _restored_minus, _restored_plus = cart_quantity_controls(
+            staff_window, cart_product_id
+        )
+        assert staff_window.cart_quantities[cart_product_id] == before_plus
+        assert Decimal(str(restored_spin.value())) == before_plus
         staff_window.cart.selectRow(0)
         schedule_modal(
             app,

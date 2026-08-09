@@ -481,22 +481,30 @@ class StaffWindow(QMainWindow):
                     item.setData(Qt.ItemDataRole.UserRole, product_id)
                     self.cart.setItem(row, column, item)
                 quantity_widget = QWidget()
+                quantity_widget.setObjectName("CartQuantityCell")
+                quantity_widget.setProperty("productId", product_id)
                 quantity_layout = QHBoxLayout(quantity_widget)
                 quantity_layout.setContentsMargins(0, 0, 0, 0)
                 minus = QPushButton("−")
+                minus.setObjectName("CartQuantityMinus")
+                minus.setProperty("productId", product_id)
                 plus = QPushButton("+")
+                plus.setObjectName("CartQuantityPlus")
+                plus.setProperty("productId", product_id)
                 spin = QDoubleSpinBox()
+                spin.setObjectName("CartQuantityValue")
+                spin.setProperty("productId", product_id)
                 spin.setDecimals(3)
                 spin.setRange(0, 999999)
                 spin.setValue(float(quantity))
                 minus.clicked.connect(
-                    lambda checked=False, pid=product_id, control=spin: (
-                        self._set_quantity(pid, max(0, control.value() - 1))
+                    lambda checked=False, pid=product_id: self._change_quantity(
+                        pid, Decimal("-1")
                     )
                 )
                 plus.clicked.connect(
-                    lambda checked=False, pid=product_id, control=spin: (
-                        self._set_quantity(pid, control.value() + 1)
+                    lambda checked=False, pid=product_id: self._change_quantity(
+                        pid, Decimal("1")
                     )
                 )
                 spin.editingFinished.connect(
@@ -547,7 +555,11 @@ class StaffWindow(QMainWindow):
         finally:
             conn.close()
 
-    def _set_quantity(self, product_id: int, value: float) -> None:
+    def _change_quantity(self, product_id: int, delta: Decimal) -> None:
+        current = self.cart_quantities.get(product_id, Decimal("0"))
+        self._set_quantity(product_id, current + delta)
+
+    def _set_quantity(self, product_id: int, value: float | Decimal) -> None:
         quantity = Decimal(str(value))
         if quantity <= 0:
             self._remove_cart(product_id)
