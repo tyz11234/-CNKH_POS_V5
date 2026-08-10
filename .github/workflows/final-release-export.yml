@@ -1,0 +1,80 @@
+name: Final Release Export
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  export-final-deliverables:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact final main
+        uses: actions/checkout@v4
+        with:
+          ref: 5d8d7439de7f1d00178e80937e21bef9f8e6ad9d
+          fetch-depth: 1
+
+      - name: Create exact clean source archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path delivery/source -Force | Out-Null
+          $zip = "delivery/source/CNKH_POS_V5_5.0.0-alpha.4_Final_Source.zip"
+          git archive --format=zip --output=$zip HEAD
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zip)) { throw "git archive failed" }
+          $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  CNKH_POS_V5_5.0.0-alpha.4_Final_Source.zip" | Set-Content delivery/source/CNKH_POS_V5_5.0.0-alpha.4_Final_Source.zip.sha256.txt -Encoding ascii
+
+      - name: Download exact fully-green Run 109 Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CNKH-Hardware-POS-V5-Windows
+          path: run109-package
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 31414301581
+
+      - name: Verify and extract final Setup only
+        shell: pwsh
+        run: |
+          $package = (Resolve-Path run109-package).Path
+          $setup = Join-Path $package "CNKH_Hardware_POS_V5_Setup.exe"
+          $buildInfoPath = Join-Path $package "build-info.json"
+          $sumsPath = Join-Path $package "SHA256SUMS.txt"
+          if (-not (Test-Path $setup) -or -not (Test-Path $buildInfoPath) -or -not (Test-Path $sumsPath)) { throw "Run 109 artifact incomplete" }
+          $buildInfo = Get-Content $buildInfoPath -Raw | ConvertFrom-Json
+          if ([string]$buildInfo.workflow_run -ne "109" -or $buildInfo.version -ne "5.0.0-alpha.4") { throw "Run 109 artifact identity mismatch" }
+          foreach ($line in Get-Content $sumsPath) {
+            if (-not $line.Trim()) { continue }
+            $parts = $line -split '\s+', 2
+            $candidate = Join-Path $package $parts[1].Trim()
+            if (-not (Test-Path $candidate)) { throw "SHA256SUMS references missing file" }
+            if ((Get-FileHash $candidate -Algorithm SHA256).Hash.ToLowerInvariant() -ne $parts[0].Trim().ToLowerInvariant()) { throw "SHA256 mismatch" }
+          }
+          New-Item -ItemType Directory -Path delivery/setup -Force | Out-Null
+          Copy-Item $setup delivery/setup/CNKH_Hardware_POS_V5_Setup.exe
+          Copy-Item $buildInfoPath delivery/setup/build-info.json
+          Copy-Item (Join-Path $package "release-manifest.json") delivery/setup/release-manifest.json
+          Copy-Item $sumsPath delivery/setup/RUN109_SHA256SUMS.txt
+          $sha = (Get-FileHash delivery/setup/CNKH_Hardware_POS_V5_Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  CNKH_Hardware_POS_V5_Setup.exe" | Set-Content delivery/setup/CNKH_Hardware_POS_V5_Setup.exe.sha256.txt -Encoding ascii
+
+      - name: Upload exact final source
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH-POS-V5-Final-Source
+          path: delivery/source/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Upload exact final Setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH-POS-V5-Final-Setup
+          path: delivery/setup/
+          retention-days: 90
+          if-no-files-found: error
