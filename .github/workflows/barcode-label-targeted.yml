@@ -1,0 +1,49 @@
+name: Barcode Label Targeted Check
+
+on:
+  push:
+    branches:
+      - ci/barcode-label-targeted-20260810
+  workflow_dispatch:
+
+jobs:
+  barcode-label-check:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install project test dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Ruff only barcode-label changes
+        run: >-
+          python -m ruff check
+          cnkh_pos/services/barcode_labels.py
+          cnkh_pos/ui/admin/barcode_labels.py
+          cnkh_pos/ui/admin/window.py
+          tests/test_barcode_labels.py
+          tests/test_barcode_labels_ui.py
+      - name: Barcode label service and UI tests only
+        run: python -m pytest -q tests/test_barcode_labels.py tests/test_barcode_labels_ui.py
+      - name: Verify Qt label-printer modules and 40x30 media
+        shell: pwsh
+        run: |
+          @'
+          from PySide6.QtCore import QSizeF
+          from PySide6.QtGui import QPageSize
+          from PySide6.QtPrintSupport import QPrinter
+          from PySide6.QtSvg import QSvgRenderer
+
+          printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+          page = QPageSize(QSizeF(40, 30), QPageSize.Unit.Millimeter, '40x30')
+          assert printer.setPageSize(page)
+          size = printer.pageLayout().pageSize().size(QPageSize.Unit.Millimeter)
+          assert abs(size.width() - 40.0) < 0.2, size.width()
+          assert abs(size.height() - 30.0) < 0.2, size.height()
+          assert QSvgRenderer is not None
+          print('BARCODE LABEL QT MEDIA CHECK PASSED')
+          '@ | python -
