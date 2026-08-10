@@ -7,8 +7,14 @@ from PySide6.QtWidgets import QComboBox, QDialog, QFormLayout, QMessageBox
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.catalog import CatalogService, ProductInput
+from cnkh_pos.services.checkout_rounding import RoundedReturnService
 from cnkh_pos.services.sales import SalesService
-from cnkh_pos.ui.admin.data_pages import ProductDialog, ProductsPage, SalesPage
+from cnkh_pos.ui.admin.data_pages import (
+    ProductDialog,
+    ProductsPage,
+    ReturnSaleDialog,
+    SalesPage,
+)
 
 
 class ProductDialogWithBarcodeMode(ProductDialog):
@@ -80,11 +86,34 @@ class ProductsPageEnhanced(ProductsPage):
 
 
 class SalesPageEnhanced(SalesPage):
-    """Adds admin-only permanent sale deletion using the existing safe service path."""
+    """Adds safe deletion and rounding-aware full returns to Admin sales records."""
 
     def __init__(self, database: Database, user: AuthenticatedUser):
         super().__init__(database, user)
         self.add_action("删除销售记录", self.delete_sale, style="DangerButton")
+
+    def return_sale(self) -> None:
+        sale_id = self.selected_id()
+        if sale_id is None:
+            QMessageBox.information(self, "Return", "请先选择销售记录。")
+            return
+        dialog = ReturnSaleDialog(self.database, sale_id, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        quantities, reason, refund_method = dialog.value()
+        try:
+            number = RoundedReturnService(self.database).create_return(
+                sale_id=sale_id,
+                quantities_by_sale_item=quantities,
+                reason=reason,
+                operator_id=self.user.id,
+                refund_method=refund_method,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Return", str(exc))
+            return
+        self.refresh()
+        QMessageBox.information(self, "Return", f"退货已保存：{number}")
 
     def delete_sale(self) -> None:
         sale_id = self.selected_id()
