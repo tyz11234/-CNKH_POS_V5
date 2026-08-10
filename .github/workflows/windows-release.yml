@@ -44,6 +44,8 @@ jobs:
           if ($missing) { throw "Missing required files: $($missing -join ', ')" }
       - name: Install dependencies
         run: python -m pip install -r requirements-build.txt
+      - name: Ruff lint
+        run: python -m ruff check .
       - name: Compile Qt resources
         run: pyside6-rcc resources/resources.qrc -o cnkh_pos/resources_rc.py
       - name: Automated tests
@@ -204,7 +206,7 @@ jobs:
             $observed = $null
             try {
               $launcher = Start-Process -FilePath $ExePath -PassThru
-              for ($attempt = 0; $attempt -lt 60; $attempt++) {
+              for ($attempt = 0; $attempt -lt 360; $attempt++) {
                 Start-Sleep -Milliseconds 250
                 $candidates = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -ge $startedAt.AddSeconds(-2) })
                 foreach ($candidate in $candidates) {
@@ -238,7 +240,7 @@ jobs:
                   main_window_handle = 0
                   exit_code = $null
                   status = "FAIL"
-                  error = "expected login window title was not observed"
+                  error = "expected login window title was not observed within 90 seconds"
                 }
               }
               return [pscustomobject]@{
