@@ -74,17 +74,18 @@ jobs:
           replace("tests/test_final_print_evidence.py", 'final-product-label-40x30-4copies.pdf', 'final-product-label-50x30-4copies.pdf', count=1)
           replace("tests/test_final_print_evidence.py", '"profile": "40x30"', '"profile": "50x30"', count=1)
 
-          # 40x30 may remain only as an optional supported profile in the service.
-          import subprocess
-          result = subprocess.run(
-              ["git", "grep", "-n", "40x30", "--", ":!cnkh_pos/services/barcode_labels.py"],
-              text=True,
-              capture_output=True,
-          )
-          if result.returncode == 0 and result.stdout.strip():
-              raise SystemExit("unexpected production/test 40x30 reference remains:\n" + result.stdout)
-          if "80mm" not in Path("tests/test_final_print_evidence.py").read_text(encoding="utf-8"):
-              raise SystemExit("80mm receipt evidence contract was lost")
+          checks = {
+              "cnkh_pos/ui/admin/barcode_labels.py": ["默认 50×30 mm", 'findData("50x30")'],
+              "tests/test_barcode_labels_ui.py": ['currentData() == "50x30"'],
+              "tests/test_barcode_labels_integration.py": ['currentData() == "50x30"'],
+              "tests/test_full_business_lifecycle.py": ['barcode_labels.50x30_four_copies'],
+              "tests/test_final_print_evidence.py": ['"profile": "50x30"', "final-product-label-50x30-4copies.pdf", "80mm"],
+          }
+          for path, required in checks.items():
+              payload = Path(path).read_text(encoding="utf-8")
+              for marker in required:
+                  if marker not in payload:
+                      raise SystemExit(f"required final specification missing from {path}: {marker}")
       - name: Install dependencies
         run: python -m pip install -r requirements-build.txt
       - name: Compile Qt resources
