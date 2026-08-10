@@ -12,7 +12,10 @@ from cnkh_pos.database.bootstrap import bootstrap_database
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthService
 from cnkh_pos.services.catalog import CatalogService, ProductInput
-from cnkh_pos.services.checkout_rounding import RoundedReturnService, RoundedSalesService
+from cnkh_pos.services.checkout_rounding import (
+    RoundedReturnService,
+    RoundedSalesService,
+)
 from cnkh_pos.services.daily_closing import DailyClosingService
 from cnkh_pos.services.money import checkout_rounding_cents, round_checkout_cents
 from cnkh_pos.services.printing import PrintingService
@@ -63,7 +66,9 @@ def test_checkout_rounding_rule_matches_requested_examples() -> None:
         round_checkout_cents(-1)
 
 
-def test_non_credit_sales_store_rounded_total_but_exact_line_values(database_and_admin) -> None:
+def test_non_credit_sales_store_rounded_total_but_exact_line_values(
+    database_and_admin,
+) -> None:
     database, admin_id = database_and_admin
     service = RoundedSalesService(database)
     cases = ((67, 70), (42, 40), (45, 45))
@@ -148,8 +153,10 @@ def test_checkout_dialog_switches_between_rounded_and_exact_credit_total() -> No
     dialog.close()
 
 
-@pytest.mark.parametrize((price, rounded), [(67, 70), (42, 40)])
-def test_full_return_reverses_checkout_rounding_and_reports(price, rounded, database_and_admin) -> None:
+@pytest.mark.parametrize("price,rounded", [(67, 70), (42, 40)])
+def test_full_return_reverses_checkout_rounding_and_reports(
+    price, rounded, database_and_admin
+) -> None:
     database, admin_id = database_and_admin
     product_id = _product(database, admin_id, price, f"Return {price}")
     sale = RoundedSalesService(database).create_sale(
@@ -161,7 +168,9 @@ def test_full_return_reverses_checkout_rounding_and_reports(price, rounded, data
     conn = database.connect(readonly=True)
     try:
         item_id = int(
-            conn.execute("SELECT id FROM sale_items WHERE sale_id=?", (sale.sale_id,)).fetchone()[0]
+            conn.execute(
+                "SELECT id FROM sale_items WHERE sale_id=?", (sale.sale_id,)
+            ).fetchone()[0]
         )
     finally:
         conn.close()
@@ -202,8 +211,10 @@ def test_daily_cash_and_receipt_use_final_rounded_total(database_and_admin) -> N
         cashier_id=admin_id,
     )
     assert DailyClosingService(database).system_cash(business_date=date.today()) == 70
-    text = PrintingService(database).render_text(PrintingService(database).receipt(sale.sale_id))
-    assert any(line.startswith("SUBTOTAL") and line.endswith("RM 0.67") for line in text.splitlines())
-    assert any(line.startswith("TOTAL") and line.endswith("RM 0.70") for line in text.splitlines())
-    assert any(line.startswith("PAID") and line.endswith("RM 0.70") for line in text.splitlines())
-    assert any(line.startswith("CHANGE") and line.endswith("RM 0.00") for line in text.splitlines())
+    printing = PrintingService(database)
+    text = printing.render_text(printing.receipt(sale.sale_id))
+    lines = text.splitlines()
+    assert any(line.startswith("SUBTOTAL") and line.endswith("RM 0.67") for line in lines)
+    assert any(line.startswith("TOTAL") and line.endswith("RM 0.70") for line in lines)
+    assert any(line.startswith("PAID") and line.endswith("RM 0.70") for line in lines)
+    assert any(line.startswith("CHANGE") and line.endswith("RM 0.00") for line in lines)
