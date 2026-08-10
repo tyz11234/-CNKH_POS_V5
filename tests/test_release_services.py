@@ -133,7 +133,7 @@ class ReleaseServiceTests(unittest.TestCase):
             cashier_id=self.admin,
         )
         result = DailyClosingService(self.database).complete(
-            business_date=date.today().isoformat(),
+            business_date=date.today(),
             cashier_id=self.admin,
             actual_cash_cents=300,
             note="counted",
