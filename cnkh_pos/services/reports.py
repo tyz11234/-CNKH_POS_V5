@@ -51,6 +51,15 @@ class ReportService:
                     ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
                 )
                 profit += int(row["subtotal_cents"]) - cost
+            sale_rounding = int(
+                conn.execute(
+                    """SELECT COALESCE(SUM(total_cents-(subtotal_cents-discount_cents)),0)
+                       FROM sales WHERE is_deleted=0
+                       AND substr(sold_at,1,10) BETWEEN ? AND ?""",
+                    (start_date, end_date),
+                ).fetchone()[0]
+            )
+            profit += sale_rounding
             returned_sales = int(
                 conn.execute(
                     """SELECT COALESCE(SUM(total_cents),0) FROM sale_returns
@@ -74,6 +83,21 @@ class ReportService:
                     ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
                 )
                 profit -= int(row["refund_cents"]) - restored_cost
+            return_rounding = int(
+                conn.execute(
+                    """SELECT COALESCE(SUM(
+                           sr.total_cents - COALESCE((
+                               SELECT SUM(sri.refund_cents)
+                               FROM sale_return_items sri
+                               WHERE sri.return_id=sr.id
+                           ),0)
+                       ),0)
+                       FROM sale_returns sr
+                       WHERE substr(sr.returned_at,1,10) BETWEEN ? AND ?""",
+                    (start_date, end_date),
+                ).fetchone()[0]
+            )
+            profit -= return_rounding
             purchases = conn.execute(
                 """SELECT COALESCE(SUM(total_cents),0) FROM purchases
                    WHERE is_deleted=0 AND substr(purchased_at,1,10) BETWEEN ? AND ?""",
