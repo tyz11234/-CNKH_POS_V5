@@ -1,4 +1,4 @@
-name: Admin Additions Focused Gate
+name: Current Additions Focused Gate
 
 on:
   workflow_dispatch:
@@ -6,27 +6,34 @@ on:
     branches: ["main"]
     paths:
       - "cnkh_pos/services/barcode_labels.py"
+      - "cnkh_pos/services/checkout_rounding.py"
+      - "cnkh_pos/services/money.py"
+      - "cnkh_pos/services/reports.py"
       - "cnkh_pos/ui/admin/barcode_labels.py"
       - "cnkh_pos/ui/admin/enhanced_data_pages.py"
       - "cnkh_pos/ui/admin/window.py"
+      - "cnkh_pos/ui/dialogs/rounded_checkout.py"
+      - "cnkh_pos/ui/staff/__init__.py"
+      - "cnkh_pos/ui/staff/enhanced_window.py"
       - "build/admin.spec"
       - "tests/test_barcode_labels.py"
       - "tests/test_barcode_labels_integration.py"
       - "tests/test_barcode_labels_ui.py"
       - "tests/test_admin_new_controls.py"
+      - "tests/test_checkout_rounding.py"
       - ".github/workflows/barcode-labels-gate.yml"
 
 permissions:
   contents: read
 
 concurrency:
-  group: admin-additions-${{ github.ref }}
+  group: current-additions-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  focused-admin-additions:
+  focused-current-additions:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 28
     env:
       PYTHONUTF8: "1"
       QT_QPA_PLATFORM: "offscreen"
@@ -45,14 +52,21 @@ jobs:
         run: >-
           python -m ruff check
           cnkh_pos/services/barcode_labels.py
+          cnkh_pos/services/checkout_rounding.py
+          cnkh_pos/services/money.py
+          cnkh_pos/services/reports.py
           cnkh_pos/ui/admin/barcode_labels.py
           cnkh_pos/ui/admin/enhanced_data_pages.py
           cnkh_pos/ui/admin/window.py
+          cnkh_pos/ui/dialogs/rounded_checkout.py
+          cnkh_pos/ui/staff/__init__.py
+          cnkh_pos/ui/staff/enhanced_window.py
           build/admin.spec
           tests/test_barcode_labels.py
           tests/test_barcode_labels_integration.py
           tests/test_barcode_labels_ui.py
           tests/test_admin_new_controls.py
+          tests/test_checkout_rounding.py
       - name: Test only current additions
         run: >-
           python -m pytest -q
@@ -60,18 +74,22 @@ jobs:
           tests/test_barcode_labels_integration.py
           tests/test_barcode_labels_ui.py
           tests/test_admin_new_controls.py
+          tests/test_checkout_rounding.py
       - name: Compile only current additions
         run: >-
           python -m compileall -q
           cnkh_pos/services/barcode_labels.py
+          cnkh_pos/services/checkout_rounding.py
+          cnkh_pos/services/money.py
+          cnkh_pos/services/reports.py
           cnkh_pos/ui/admin/barcode_labels.py
           cnkh_pos/ui/admin/enhanced_data_pages.py
           cnkh_pos/ui/admin/window.py
-          tests/test_barcode_labels.py
-          tests/test_barcode_labels_integration.py
-          tests/test_barcode_labels_ui.py
+          cnkh_pos/ui/dialogs/rounded_checkout.py
+          cnkh_pos/ui/staff/enhanced_window.py
           tests/test_admin_new_controls.py
-      - name: Build Admin EXE with new dependencies
+          tests/test_checkout_rounding.py
+      - name: Build Admin EXE with current additions
         run: pyinstaller --noconfirm --clean build/admin.spec
       - name: Packaged Admin self-test smoke
         shell: pwsh
@@ -83,16 +101,26 @@ jobs:
           $env:CNKH_POS_SELF_TEST_REPORT = $report
           $process = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Admin self-test failed with exit code $($process.ExitCode)" }
-          if (-not (Test-Path $report)) { throw "Admin self-test report missing" }
           $result = Get-Content $report -Raw | ConvertFrom-Json
-          if ($result.status -ne "PASS" -or $result.mode -ne "admin") {
-            throw "Admin self-test did not report PASS/admin"
-          }
+          if ($result.status -ne "PASS" -or $result.mode -ne "admin") { throw "Admin self-test did not report PASS/admin" }
+      - name: Build Staff EXE with rounded checkout
+        run: pyinstaller --noconfirm --clean build/staff.spec
+      - name: Packaged Staff self-test smoke
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "dist/CNKH_POS_Staff.exe"
+          if ((Get-Item $exe).Length -lt 10MB) { throw "Staff EXE is unexpectedly small" }
+          $report = (Join-Path (Resolve-Path focused-artifacts) "staff-additions-self-test.json")
+          $env:CNKH_POS_SELF_TEST_REPORT = $report
+          $process = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Staff self-test failed with exit code $($process.ExitCode)" }
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          if ($result.status -ne "PASS" -or $result.mode -ne "staff") { throw "Staff self-test did not report PASS/staff" }
       - name: Upload focused diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Admin-Additions-Focused-Diagnostics
+          name: Current-Additions-Focused-Diagnostics
           path: focused-artifacts/
           if-no-files-found: ignore
           retention-days: 14
