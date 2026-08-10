@@ -87,8 +87,10 @@ class DiscountDialog(QDialog):
 
     def _accept_if_valid(self) -> None:
         try:
-            self.discount_cents
+            discount = self.discount_cents
         except ValueError as exc:
             QMessageBox.warning(self, "Discount", str(exc))
+            return
+        if discount < 0:
             return
         self.accept()
