@@ -188,7 +188,9 @@ class DashboardPage(QWidget):
                 "#168A3F",
             ),
         ]
-        for label, (text, color) in zip(self.notification_labels, notifications):
+        for label, (text, color) in zip(
+            self.notification_labels, notifications, strict=True
+        ):
             label.setText(text)
             label.setStyleSheet(f"color:{color}; padding:4px 0;")
 
