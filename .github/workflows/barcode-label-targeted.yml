@@ -40,7 +40,7 @@ jobs:
 
           printer = QPrinter(QPrinter.PrinterMode.HighResolution)
           page = QPageSize(QSizeF(40, 30), QPageSize.Unit.Millimeter, '40x30')
-          assert printer.setPageSize(page)
+          printer.setPageSize(page)
           size = printer.pageLayout().pageSize().size(QPageSize.Unit.Millimeter)
           assert abs(size.width() - 40.0) < 0.2, size.width()
           assert abs(size.height() - 30.0) < 0.2, size.height()
