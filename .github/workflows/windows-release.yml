@@ -147,6 +147,15 @@ jobs:
       - name: Installed EXE normal launch smoke test
         shell: pwsh
         run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Installed"
+          $admin = Join-Path $installDir "CNKH_POS_Admin.exe"
+          $staff = Join-Path $installDir "CNKH_POS_Staff.exe"
+          if (-not (Test-Path $admin) -or -not (Test-Path $staff)) {
+            throw "Installed Admin or Staff executable is missing before normal-launch smoke test"
+          }
+          New-Item -ItemType Directory -Path self-test-artifacts -Force | Out-Null
+          $artifactDir = (Resolve-Path "self-test-artifacts").Path
+
           $smokeLocalAppData = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Smoke-Profile"
           if (Test-Path $smokeLocalAppData) { Remove-Item $smokeLocalAppData -Recurse -Force }
           New-Item -ItemType Directory -Path $smokeLocalAppData -Force | Out-Null
@@ -309,6 +318,14 @@ jobs:
             commit = "${{ github.sha }}"
             workflow_run = "${{ github.run_number }}"
           } | ConvertTo-Json | Set-Content release-package/build-info.json -Encoding UTF8
+      - name: Upload GUI acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH-POS-V5-GUI-Acceptance
+          path: ui-acceptance-artifacts/
+          if-no-files-found: ignore
+          retention-days: 30
       - name: Upload self-test diagnostics
         if: always()
         uses: actions/upload-artifact@v4
