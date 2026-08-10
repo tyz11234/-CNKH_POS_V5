@@ -11,6 +11,7 @@ from cnkh_pos.database.connection import Database
 from cnkh_pos.services.money import format_myr
 
 WINDOWS_DEFAULT_PRINTER = "__WINDOWS_DEFAULT__"
+RECEIPT_TEXT_WIDTH = 40
 
 
 def resolve_printer_target(
@@ -37,6 +38,16 @@ def resolve_printer_target(
     raise RuntimeError(
         "no printer has been selected; choose Windows default or a named printer in Admin Settings"
     )
+
+
+def _receipt_pair(left: object, right: object, *, width: int = RECEIPT_TEXT_WIDTH) -> str:
+    """Fit a left label/detail and right value into one thermal-receipt line."""
+    left_text = str(left)
+    right_text = str(right)
+    if len(right_text) >= width:
+        return right_text[-width:]
+    left_width = width - len(right_text)
+    return f"{left_text[:left_width]:<{left_width}}{right_text}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,35 +135,41 @@ class PrintingService:
 
     @staticmethod
     def render_text(receipt: Receipt) -> str:
-        width = 42
+        width = RECEIPT_TEXT_WIDTH
         lines = [
             str(receipt.settings.get("store_name", "CNKH Hardware")).center(width),
             str(receipt.settings.get("address", "")).center(width),
             str(receipt.settings.get("phone", "")).center(width),
             "-" * width,
-            f"Receipt: {receipt.receipt_no}",
-            f"Date: {receipt.sold_at}",
-            f"Cashier: {receipt.cashier}",
+            f"Receipt: {receipt.receipt_no}"[:width],
+            f"Date: {receipt.sold_at}"[:width],
+            f"Cashier: {receipt.cashier}"[:width],
             "-" * width,
         ]
         for item in receipt.items:
             lines.append(str(item["product_name_snapshot"])[:width])
             qty = item["quantity_decimal"]
             detail = f"  {qty} {item['unit_snapshot']} x {format_myr(int(item['unit_price_cents']))}"
-            lines.append(f"{detail:<30}{format_myr(int(item['subtotal_cents'])):>12}")
+            lines.append(
+                _receipt_pair(detail, format_myr(int(item["subtotal_cents"])), width=width)
+            )
             if int(item["discount_cents"]):
                 lines.append(
-                    f"  Discount / 折扣{format_myr(-int(item['discount_cents'])):>25}"
+                    _receipt_pair(
+                        "  Discount / 折扣",
+                        format_myr(-int(item["discount_cents"])),
+                        width=width,
+                    )
                 )
         lines.extend(
             [
                 "-" * width,
-                f"SUBTOTAL{format_myr(receipt.subtotal_cents):>34}",
-                f"DISCOUNT{format_myr(-receipt.discount_cents):>34}",
-                f"TOTAL{format_myr(receipt.total_cents):>37}",
-                f"PAID{format_myr(receipt.paid_cents):>38}",
-                f"CHANGE{format_myr(receipt.change_cents):>36}",
-                f"Payment: {receipt.payment_method}",
+                _receipt_pair("SUBTOTAL", format_myr(receipt.subtotal_cents), width=width),
+                _receipt_pair("DISCOUNT", format_myr(-receipt.discount_cents), width=width),
+                _receipt_pair("TOTAL", format_myr(receipt.total_cents), width=width),
+                _receipt_pair("PAID", format_myr(receipt.paid_cents), width=width),
+                _receipt_pair("CHANGE", format_myr(receipt.change_cents), width=width),
+                f"Payment: {receipt.payment_method}"[:width],
                 "-" * width,
                 str(receipt.settings.get("footer", "")).center(width),
                 str(receipt.settings.get("notes", "")).center(width),
@@ -178,13 +195,16 @@ class PrintingService:
         self, receipt: Receipt, *, output_pdf: Path | None = None
     ) -> None:
         """Print through Qt. Tests can select PDF output without requiring hardware."""
-        from PySide6.QtCore import QSizeF
-        from PySide6.QtGui import QPageSize, QTextDocument
+        from PySide6.QtCore import QMarginsF, QSizeF
+        from PySide6.QtGui import QPageLayout, QPageSize, QTextDocument
         from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
 
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
         printer.setPageSize(
             QPageSize(QSizeF(80, 297), QPageSize.Unit.Millimeter, "80mm")
+        )
+        printer.setPageMargins(
+            QMarginsF(4, 4, 4, 4), QPageLayout.Unit.Millimeter
         )
         if output_pdf is not None:
             output_pdf.parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +220,7 @@ class PrintingService:
             if target is not None:
                 printer.setPrinterName(target)
         document = QTextDocument()
+        document.setDocumentMargin(0)
         escaped = (
             self.render_text(receipt)
             .replace("&", "&amp;")
@@ -207,7 +228,7 @@ class PrintingService:
             .replace(">", "&gt;")
         )
         document.setHtml(
-            f"<pre style='font-family:Consolas;font-size:8pt'>{escaped}</pre>"
+            f"<pre style='font-family:Consolas;font-size:7.5pt;margin:0'>{escaped}</pre>"
         )
         document.print_(printer)
         if printer.printerState() == QPrinter.PrinterState.Error:
