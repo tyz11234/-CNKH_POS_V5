@@ -51,9 +51,10 @@ jobs:
           if (-not (Test-Path $sumsPath)) { throw "SHA256SUMS.txt missing from Run 103 artifact" }
           if (-not (Test-Path $setupPath)) { throw "Setup.exe missing from Run 103 artifact" }
 
+          New-Item -ItemType Directory -Path post-install-evidence -Force | Out-Null
           $buildInfo = Get-Content $buildInfoPath -Raw | ConvertFrom-Json
-          if ($buildInfo.commit -ne "6661f336da62028fd9e5b8f16bcbd7a286bbcac3") {
-            throw "Artifact commit mismatch: $($buildInfo.commit)"
+          if ($buildInfo.commit -ne "dbed6dee61b889bcb1f56ffb6ce0ba723bccf7d3") {
+            throw "Artifact build merge-commit mismatch: $($buildInfo.commit)"
           }
           if ([string]$buildInfo.workflow_run -ne "103") {
             throw "Artifact workflow run mismatch: $($buildInfo.workflow_run)"
@@ -71,12 +72,12 @@ jobs:
             if ($actual -ne $expected) { throw "SHA256 mismatch for $name" }
           }
 
-          New-Item -ItemType Directory -Path post-install-evidence -Force | Out-Null
           [pscustomobject]@{
             artifact_run = 103
             artifact_id = 9071631565
             artifact_archive_digest = "sha256:eb738abbb9d334b41d80340d0bf6a5874f96ff72beb02f9df112c0a95a59e8de"
-            source_commit = $buildInfo.commit
+            artifact_head_sha = "6661f336da62028fd9e5b8f16bcbd7a286bbcac3"
+            artifact_build_merge_commit = $buildInfo.commit
             setup_sha256 = (Get-FileHash $setupPath -Algorithm SHA256).Hash.ToLowerInvariant()
             package_sha256_verified = $true
             status = "PASS"
@@ -306,7 +307,8 @@ jobs:
           }
           [pscustomobject]@{
             status = "PASS"
-            source_commit = "6661f336da62028fd9e5b8f16bcbd7a286bbcac3"
+            source_head_commit = "6661f336da62028fd9e5b8f16bcbd7a286bbcac3"
+            artifact_build_merge_commit = "dbed6dee61b889bcb1f56ffb6ce0ba723bccf7d3"
             source_release_gate_run = 103
             source_release_artifact_id = 9071631565
             source_release_artifact_digest = "sha256:eb738abbb9d334b41d80340d0bf6a5874f96ff72beb02f9df112c0a95a59e8de"
