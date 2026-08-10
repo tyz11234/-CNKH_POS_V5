@@ -38,7 +38,7 @@ from cnkh_pos.services.document_numbers import (
     document_prefixes,
     save_document_prefixes,
 )
-from cnkh_pos.services.money import format_myr
+from cnkh_pos.services.money import format_myr, rm_to_cents
 from cnkh_pos.services.printing import (
     WINDOWS_DEFAULT_PRINTER,
     resolve_printer_target,
@@ -211,7 +211,7 @@ class QuickAmountsWidget(QWidget):
                 )
                 conn.execute(
                     "INSERT INTO quick_amounts(amount_cents,is_enabled,sort_order) VALUES (?,1,?)",
-                    (round(amount * 100), order),
+                    (rm_to_cents(amount), order),
                 )
             self.refresh()
 
@@ -226,7 +226,7 @@ class QuickAmountsWidget(QWidget):
             with self.database.transaction() as conn:
                 conn.execute(
                     "UPDATE quick_amounts SET amount_cents=? WHERE id=?",
-                    (round(amount * 100), item_id),
+                    (rm_to_cents(amount), item_id),
                 )
             self.refresh()
 
@@ -452,6 +452,16 @@ class ReceiptSettingsWidget(QWidget):
         document = QTextDocument()
         document.setPlainText(self.preview.toPlainText())
         document.print_(printer)
+        if printer.printerState() == QPrinter.PrinterState.Error:
+            QMessageBox.warning(
+                self, "Test Print", "打印机在发送测试小票时报告错误。"
+            )
+            return
+        if output_path is not None and (
+            not output_path.is_file() or output_path.stat().st_size == 0
+        ):
+            QMessageBox.warning(self, "Test Print", "测试 PDF 未成功建立。")
+            return
         QMessageBox.information(
             self,
             "Test Print",
@@ -585,15 +595,15 @@ class DailyClosingPage(QWidget):
     def load_system_cash(self) -> None:
         cents = DailyClosingService(self.database).system_cash(
             business_date=date.today(),
-            opening_cash_cents=round(self.opening.value() * 100),
+            opening_cash_cents=rm_to_cents(self.opening.value()),
         )
         self.system.setText(f"{cents / 100:.2f}")
         self.update_variance()
 
     def update_variance(self) -> None:
         try:
-            system = round(float(self.system.text()) * 100)
-            actual = round(self.actual.value() * 100)
+            system = rm_to_cents(self.system.text())
+            actual = rm_to_cents(self.actual.value())
             self.variance.setText(format_myr(actual - system))
         except ValueError:
             self.variance.setText("—")
@@ -603,8 +613,8 @@ class DailyClosingPage(QWidget):
             DailyClosingService(self.database).complete(
                 business_date=date.today(),
                 cashier_id=self.user.id,
-                opening_cash_cents=round(self.opening.value() * 100),
-                actual_cash_cents=round(self.actual.value() * 100),
+                opening_cash_cents=rm_to_cents(self.opening.value()),
+                actual_cash_cents=rm_to_cents(self.actual.value()),
                 note=self.note.toPlainText(),
             )
         except Exception as exc:
@@ -658,19 +668,19 @@ class ReportsPage(QWidget):
             raise ValueError("start date cannot be after end date")
         return start, end
 
-    def refresh(self) -> None:
+    def refresh(self) -> bool:
         try:
             start, end = self._date_range()
         except ValueError as exc:
             QMessageBox.warning(self, "Reports", str(exc))
-            return
+            return False
         try:
             result = ReportService(self.database).summary(
                 start_date=start, end_date=end
             )
         except Exception as exc:
             QMessageBox.warning(self, "Reports", str(exc))
-            return
+            return False
         self.summary.setText(
             f"Period: {start} to {end}\nSales: {format_myr(result.sales_cents)}\n"
             f"Gross Profit after Discounts: {format_myr(result.gross_profit_cents)}\n"
@@ -679,6 +689,7 @@ class ReportsPage(QWidget):
             f"Current Customer Receivables: {format_myr(result.current_receivable_cents)}\n"
             f"Current Supplier Payables: {format_myr(result.current_payable_cents)}"
         )
+        return True
 
     def export_excel(self) -> None:
         from openpyxl import Workbook
@@ -689,7 +700,8 @@ class ReportsPage(QWidget):
         except ValueError as exc:
             QMessageBox.warning(self, "Reports", str(exc))
             return
-        self.refresh()
+        if not self.refresh():
+            return
         paths = AppPaths.default()
         paths.ensure_directories()
         target = paths.exports / f"CNKH_POS_Report_{datetime.now():%Y%m%d_%H%M%S}.xlsx"
@@ -727,6 +739,23 @@ class ReportsPage(QWidget):
                        FROM purchases WHERE is_deleted=0
                        AND substr(purchased_at,1,10) BETWEEN ? AND ?
                        ORDER BY purchased_at DESC""",
+                    (start, end),
+                ),
+                (
+                    "Returns",
+                    [
+                        "Return No",
+                        "Returned At",
+                        "Original Receipt",
+                        "Refund (sen)",
+                        "Refund Method",
+                        "Reason",
+                    ],
+                    """SELECT r.return_no,r.returned_at,s.receipt_no,r.total_cents,
+                              r.refund_method,r.reason
+                       FROM sale_returns r JOIN sales s ON s.id=r.sale_id
+                       WHERE substr(r.returned_at,1,10) BETWEEN ? AND ?
+                       ORDER BY r.returned_at DESC""",
                     (start, end),
                 ),
                 (

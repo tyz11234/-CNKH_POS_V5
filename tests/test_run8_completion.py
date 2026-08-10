@@ -647,5 +647,18 @@ class Run8MigrationTests(unittest.TestCase):
                 conn.close()
 
 
+class Run8ReleaseGateRegressionTests(unittest.TestCase):
+    def test_daily_closing_acceptance_uses_spinbox_numeric_api(self) -> None:
+        acceptance = (
+            Path(__file__).resolve().parents[1]
+            / "tools"
+            / "windows_gui_acceptance.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "daily.actual.setValue(float(daily.system.text()))", acceptance
+        )
+        self.assertNotIn("daily.actual.setText(", acceptance)
+
+
 if __name__ == "__main__":
     unittest.main()

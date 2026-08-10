@@ -161,6 +161,7 @@ class PrintingService:
         return "\n".join(line for line in lines if line.strip())
 
     def render_pdf(self, receipt: Receipt, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
         text = self.render_text(receipt)
         line_height = 4.2 * mm
         height = max(120 * mm, (text.count("\n") + 5) * line_height)
@@ -186,6 +187,7 @@ class PrintingService:
             QPageSize(QSizeF(80, 297), QPageSize.Unit.Millimeter, "80mm")
         )
         if output_pdf is not None:
+            output_pdf.parent.mkdir(parents=True, exist_ok=True)
             printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
             printer.setOutputFileName(str(output_pdf))
         else:
@@ -208,3 +210,9 @@ class PrintingService:
             f"<pre style='font-family:Consolas;font-size:8pt'>{escaped}</pre>"
         )
         document.print_(printer)
+        if printer.printerState() == QPrinter.PrinterState.Error:
+            raise RuntimeError("printer reported an error while sending the receipt")
+        if output_pdf is not None and (
+            not output_pdf.is_file() or output_pdf.stat().st_size == 0
+        ):
+            raise RuntimeError("PDF receipt output was not created")

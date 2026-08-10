@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from math import isfinite
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
@@ -43,6 +44,21 @@ class ImportSummary:
 class ExcelImportService:
     def __init__(self, database: Database):
         self.database = database
+
+    @staticmethod
+    def barcode_text(value: object) -> str:
+        """Normalize Excel integer cells without corrupting text containing `.0`."""
+        if value is None:
+            return ""
+        if isinstance(value, float):
+            if not isfinite(value):
+                return str(value)
+            if value.is_integer():
+                return f"{value:.0f}"
+        text = str(value).strip()
+        if text.endswith(".0") and text[:-2].isdigit():
+            return text[:-2]
+        return text
 
     @staticmethod
     def create_template(path: Path) -> Path:
@@ -100,7 +116,7 @@ class ExcelImportService:
                 item = ImportRow(row_number, values)
                 name = str(values.get("Product Name") or "").strip()
                 sku = str(values.get("SKU") or "").strip()
-                barcode = str(values.get("Barcode") or "").strip().replace(".0", "")
+                barcode = self.barcode_text(values.get("Barcode"))
                 if not name:
                     item.errors.append("Missing Required Field: Product Name")
                 name_key = name.casefold()
@@ -189,8 +205,7 @@ class ExcelImportService:
                         unit=str(values.get("Unit") or "pcs"),
                         location=str(values.get("Location") or ""),
                         low_stock=str(values.get("Low Stock Level") or "0"),
-                        barcode=str(values.get("Barcode") or "").replace(".0", "")
-                        or None,
+                        barcode=self.barcode_text(values.get("Barcode")) or None,
                     ),
                     admin_id=admin_id,
                 )

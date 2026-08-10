@@ -30,7 +30,11 @@ class BackupService:
         target_conn = sqlite3.connect(target)
         try:
             source_conn.backup(target_conn)
-            target_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            integrity = [str(row[0]) for row in target_conn.execute("PRAGMA integrity_check")]
+            if integrity != ["ok"]:
+                raise RuntimeError(
+                    "new backup failed integrity check: " + " | ".join(integrity)
+                )
         except BaseException:
             target_conn.close()
             source_conn.close()

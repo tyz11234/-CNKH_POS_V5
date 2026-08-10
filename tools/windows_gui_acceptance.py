@@ -227,7 +227,9 @@ def main() -> int:
             app.processEvents()
             assert admin_window.pages.currentIndex() == page_index
             assert_visible_buttons(admin_window, QPushButton, QAbstractScrollArea)
-            admin_window.grab().save(str(artifact / f"admin-page-{page_index}.png"))
+            save_screenshot(
+                admin_window, artifact / f"admin-page-{page_index}.png"
+            )
             for tabs in admin_window.pages.currentWidget().findChildren(QTabWidget):
                 for tab_index in range(tabs.count()):
                     tabs.setCurrentIndex(tab_index)
@@ -243,8 +245,9 @@ def main() -> int:
                         send_wheel(
                             table, QWheelEvent, QPointF, QPoint, Qt, QApplication
                         )
-                    admin_window.grab().save(
-                        str(artifact / f"admin-page-{page_index}-tab-{tab_index}.png")
+                    save_screenshot(
+                        admin_window,
+                        artifact / f"admin-page-{page_index}-tab-{tab_index}.png",
                     )
 
         # Native list/table widgets receive a real wheel event without requiring scrollbar dragging.
@@ -352,7 +355,7 @@ def main() -> int:
         QTest.mouseClick(staff_window.retrieve_button, Qt.MouseButton.LeftButton)
         assert staff_window.cart_quantities == held_quantities
         assert staff_window.cart_discounts == held_discounts
-        staff_window.grab().save(str(artifact / "staff-pos.png"))
+        save_screenshot(staff_window, artifact / "staff-pos.png")
         for item_view in (
             staff_window.products,
             staff_window.cart,
@@ -371,7 +374,7 @@ def main() -> int:
         )
         payment.show()
         app.processEvents()
-        payment.grab().save(str(artifact / "payment-dialog.png"))
+        save_screenshot(payment, artifact / "payment-dialog.png")
         QTest.mouseClick(payment.settings_button, Qt.MouseButton.LeftButton)
         assert settings_clicks == [True]
 
@@ -396,7 +399,7 @@ def main() -> int:
         )
         completed.show()
         app.processEvents()
-        completed.grab().save(str(artifact / "sale-completed.png"))
+        save_screenshot(completed, artifact / "sale-completed.png")
         completed.close()
 
         # Complete all four payment methods through the real Staff checkout button,
@@ -416,7 +419,9 @@ def main() -> int:
 
             def finish_sale(completed_dialog: QDialog) -> None:
                 assert isinstance(completed_dialog, SaleCompletedDialog)
-                completed_dialog.grab().save(str(artifact / "sale-completed-real.png"))
+                save_screenshot(
+                    completed_dialog, artifact / "sale-completed-real.png"
+                )
                 if print_receipt:
                     schedule_modal(
                         app,
@@ -434,7 +439,7 @@ def main() -> int:
 
             def pay(payment_dialog: QDialog) -> None:
                 assert isinstance(payment_dialog, CheckoutDialog)
-                payment_dialog.grab().save(str(artifact / "payment-dialog-real.png"))
+                save_screenshot(payment_dialog, artifact / "payment-dialog-real.png")
                 if open_settings:
                     schedule_modal(
                         app,
@@ -1186,7 +1191,7 @@ def main() -> int:
         report_tabs.setCurrentIndex(1)
         daily = report_tabs.currentWidget()
         assert isinstance(daily, DailyClosingPage)
-        daily.actual.setText(daily.system.text())
+        daily.actual.setValue(float(daily.system.text()))
         schedule_modal(
             app,
             QTimer,
@@ -1295,13 +1300,23 @@ def main() -> int:
         assert isinstance(dashboard, DashboardPage)
         QTest.mouseClick(dashboard.refresh_button, Qt.MouseButton.LeftButton)
         assert dashboard.recent_table.rowCount() >= 4
-        admin_window.grab().save(str(artifact / "admin-dashboard-final.png"))
+        save_screenshot(admin_window, artifact / "admin-dashboard-final.png")
 
         admin_window.close()
         staff_window.close()
         app.processEvents()
     print(f"WINDOWS GUI ACCEPTANCE {args.scale}% PASSED")
     return 0
+
+
+def save_screenshot(widget, path: Path) -> None:
+    pixmap = widget.grab()
+    if pixmap.isNull():
+        raise AssertionError(f"screenshot is null: {path}")
+    if not pixmap.save(str(path)):
+        raise AssertionError(f"screenshot could not be saved: {path}")
+    if not path.is_file() or path.stat().st_size == 0:
+        raise AssertionError(f"screenshot is empty: {path}")
 
 
 def assert_visible_buttons(window, button_type, scroll_area_type) -> None:

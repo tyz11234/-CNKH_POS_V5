@@ -42,6 +42,8 @@ def cart_state_from_held_payload(
         discount_cents = int(item.get("discount_cents", 0))
         if quantity <= 0 or discount_cents < 0:
             raise ValueError("invalid held-order quantity or discount")
+        if product_id in quantities:
+            raise ValueError("held order contains duplicate product lines")
         quantities[product_id] = quantity
         if discount_cents:
             discounts[product_id] = discount_cents
@@ -55,6 +57,7 @@ class HeldOrderService:
     def hold(self, payload: dict[str, object], *, cashier_id: int) -> HeldOrder:
         if not payload.get("items"):
             raise ValueError("cannot hold an empty cart")
+        cart_state_from_held_payload(payload)
         with self.database.transaction() as conn:
             number = next_document_number(conn, "HOLD", date.today(), "HOLD-")
             cursor = conn.execute(
@@ -85,6 +88,8 @@ class HeldOrderService:
         return self.retrieve(held[0].id, cashier_id=cashier_id)
 
     def list_held(self, *, cashier_id: int, limit: int = 50) -> list[HeldOrder]:
+        if limit < 1 or limit > 200:
+            raise ValueError("held-order limit must be between 1 and 200")
         conn = self.database.connect(readonly=True)
         try:
             rows = conn.execute(

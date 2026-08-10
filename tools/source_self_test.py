@@ -59,10 +59,24 @@ def main() -> int:
         "QT_SCALE_FACTOR: \"1.25\"",
         "QT_SCALE_FACTOR: \"1.5\"",
         "Silent install and installed self-tests",
+        "CNKH_POS_SELF_TEST_REPORT",
+        "-Wait -PassThru",
+        "installed-admin.json",
+        "installed-staff.json",
+        "Installed EXE normal launch smoke test",
+        "installed-normal-launch.json",
+        "CNKH POS Admin Login",
+        "CNKH POS Staff Login",
+        "python -m unittest discover -s tests -v",
+        "python -m compileall -q cnkh_pos tools tests admin_launcher.py staff_launcher.py",
         "SHA256SUMS.txt",
     ):
         if marker not in workflow:
             raise RuntimeError(f"Windows release gate is missing: {marker}")
+    if "$LASTEXITCODE" in workflow:
+        raise RuntimeError(
+            "Windows release gate must read exit codes from waited GUI processes"
+        )
 
     from cnkh_pos.config import SCHEMA_VERSION
     from cnkh_pos.database.bootstrap import bootstrap_database
