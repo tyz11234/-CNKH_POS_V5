@@ -9,7 +9,10 @@ from cnkh_pos.database.bootstrap import bootstrap_database
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser, AuthService
 from cnkh_pos.services.catalog import CatalogService, ProductInput
-from cnkh_pos.services.discounts import allocate_order_discount, discount_cents_from_value
+from cnkh_pos.services.discounts import (
+    allocate_order_discount,
+    discount_cents_from_value,
+)
 from cnkh_pos.ui.dialogs.discount import DiscountDialog
 from cnkh_pos.ui.dialogs.rounded_checkout import RoundedCheckoutDialog
 from cnkh_pos.ui.staff.enhanced_window import StaffWindowEnhanced
