@@ -25,6 +25,32 @@ def clamp_discount_cents(discount_cents: int, line_cents: int) -> int:
     return max(0, min(int(discount_cents), max(0, int(line_cents))))
 
 
+def round_cash_change_cents(change_cents: int) -> int:
+    """Round cash change using the shop rule requested for the final 10-sen digit.
+
+    1-4 sen round down to 0, 5 sen stays unchanged, and 6-9 sen round up
+    to the next 10 sen. Examples: 42 -> 40, 45 -> 45, 67 -> 70.
+    """
+    change = max(0, int(change_cents))
+    remainder = change % 10
+    if remainder <= 4:
+        return change - remainder
+    if remainder == 5:
+        return change
+    return change + (10 - remainder)
+
+
+def cash_rounding_adjustment_cents(
+    *, total_cents: int, paid_cents: int, change_cents: int
+) -> int:
+    """Return the cash retained adjustment caused by rounded change.
+
+    Positive means the till keeps more cash than the unrounded sale total;
+    negative means the customer receives extra change.
+    """
+    return int(paid_cents) - int(change_cents) - int(total_cents)
+
+
 def format_myr(cents: int) -> str:
     sign = "-" if cents < 0 else ""
     absolute = abs(int(cents))
