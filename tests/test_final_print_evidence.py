@@ -120,7 +120,19 @@ def test_final_barcode_label_and_80mm_receipt_evidence() -> None:
         qt_document = QPdfDocument()
         qt_document.load(str(qt_pdf))
         assert qt_document.pageCount() == 1
-        preview = qt_document.render(0, QSize(400, 1485))
+        qt_page_points = qt_document.pagePointSize(0)
+        qt_page_width_mm = float(qt_page_points.width()) * 25.4 / 72.0
+        qt_page_height_mm = float(qt_page_points.height()) * 25.4 / 72.0
+        assert 79.0 <= qt_page_width_mm <= 81.0
+        # The source receipt is content-sized (120 mm for this evidence sale).
+        # A regression to the old 297 mm A4-like roll length must fail.
+        assert 110.0 <= qt_page_height_mm <= 130.0
+        preview_width = 400
+        preview_height = max(
+            1,
+            int(round(preview_width * qt_page_points.height() / qt_page_points.width())),
+        )
+        preview = qt_document.render(0, QSize(preview_width, preview_height))
         assert not preview.isNull()
         preview_path = EVIDENCE_DIR / "final-receipt-qt-80mm-preview.png"
         assert preview.save(str(preview_path), "PNG")
@@ -163,6 +175,8 @@ def test_final_barcode_label_and_80mm_receipt_evidence() -> None:
                 "qt_pdf": qt_pdf.name,
                 "qt_bytes": qt_pdf.stat().st_size,
                 "qt_ink_width_ratio": round(qt_ink_width_ratio, 4),
+                "qt_page_width_mm": round(qt_page_width_mm, 2),
+                "qt_page_height_mm": round(qt_page_height_mm, 2),
             },
         }
         (EVIDENCE_DIR / "final-print-evidence.json").write_text(

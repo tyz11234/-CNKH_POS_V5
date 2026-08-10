@@ -443,7 +443,9 @@ table.total td {{ font-weight: 800; }}
             # font-path corruption that can turn receipt glyphs into black blocks.
             printer.setResolution(203)
             source_height_mm = float(page_points.height()) * 25.4 / 72.0
-            paper_height_mm = max(297.0, source_height_mm)
+            # Thermal receipt rolls should advance only for rendered content;
+            # do not force an A4-length 297 mm page that wastes blank paper.
+            paper_height_mm = source_height_mm
             printer.setPageSize(
                 QPageSize(
                     QSizeF(80.0, paper_height_mm),

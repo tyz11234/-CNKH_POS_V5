@@ -20,11 +20,16 @@
 - 商品条码标签默认规格：**50 × 30 mm**。
 - 条码标签打印张数：用户可自定义 1–999 张；每张标签独立一页/一张。
 - 销售小票规格：**80 mm 热敏纸**。
-- 80mm Qt/QPrinter 路径必须使用可读性回归，防止出现字体黑块、金额裁切或内容异常收缩。
-- 实体打印机仍属于最终现场硬件兼容性验证；CI 负责验证 Windows 打印路径、PDF 输出与版面证据。
+- 80mm 小票纸长必须跟随实际内容动态生成，不得强制使用 297 mm 固定页长；标准证据小票约为 120 mm 高。
+- 80mm Qt/QPrinter 路径必须使用可读性与纸长回归，防止字体黑块、金额裁切、内容异常收缩或大量空白出纸。
+- 实体打印机仍属于最终现场硬件兼容性验证；CI 负责验证 Windows 打印路径、PDF 输出、80mm 页面宽度、动态内容纸长与版面证据。
 
 ## 当前验证状态
 
 GitHub Actions Run #92 曾完整通过代码、GUI、EXE、Setup、安装后 self-test、普通启动 smoke 与 Artifact 上传；人工检查证据时发现 Qt 80mm 小票存在黑块，因此未签为最终完成。随后已修复 Qt 80mm 打印路径，并通过 focused Windows 可读性回归。
 
-之后用户将商品条码标签最终规格明确为 50 × 30 mm。50×30 的默认 UI、PDF、Windows 条码渲染与相关 focused 测试已经通过；最终干净 Windows Release Gate 必须在包含 50×30 标签 + 80mm 小票修复的同一 commit 上重新完整通过后，才可称为最终 Windows Installation Candidate。
+之后用户将商品条码标签最终规格明确为 50 × 30 mm。50×30 的默认 UI、PDF、Windows 条码渲染与相关 focused 测试已经通过。
+
+Run #105 对已合并 main 的产品源码快照再次完整通过 28/28 Windows Release Gate，但人工检查最终 Qt PDF 时确认页长仍固定为 297 mm，会造成热敏纸大量空白。随后已将 Qt/QPrinter 页长改为跟随已验证的 80mm 内容 PDF，并通过 focused Windows 测试，要求证据小票宽约 80 mm、高约 120 mm且内容可读。
+
+最终干净 Windows Release Gate 必须在包含 50×30 标签 + 80mm 动态纸长修复的同一 commit 上重新完整通过后，才可称为最终 Windows Installation Candidate。
