@@ -1,0 +1,30 @@
+name: Ruff Gate
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: ["main"]
+  push:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ruff-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ruff:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install Ruff
+        run: python -m pip install "ruff>=0.8,<1"
+      - name: Ruff check
+        run: python -m ruff check cnkh_pos tools tests admin_launcher.py staff_launcher.py main.py --exclude cnkh_pos/resources_rc.py
