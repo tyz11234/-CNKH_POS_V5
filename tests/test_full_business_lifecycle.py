@@ -32,7 +32,10 @@ from cnkh_pos.services.catalog import (
     ProductInput,
     is_valid_ean13,
 )
-from cnkh_pos.services.checkout_rounding import RoundedReturnService, RoundedSalesService
+from cnkh_pos.services.checkout_rounding import (
+    RoundedReturnService,
+    RoundedSalesService,
+)
 from cnkh_pos.services.daily_closing import DailyClosingService
 from cnkh_pos.services.discounts import discount_cents_from_value
 from cnkh_pos.services.entities import EntityInput, EntityService
