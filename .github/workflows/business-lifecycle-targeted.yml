@@ -39,7 +39,7 @@ jobs:
         shell: pwsh
         run: |
           $env:CNKH_POS_BUSINESS_ACCEPTANCE_DIR = (Join-Path $PWD "business-acceptance-artifacts")
-          python tools/windows_business_acceptance.py
+          python -m tools.windows_business_acceptance
       - name: Upload business lifecycle evidence
         if: always()
         uses: actions/upload-artifact@v4
