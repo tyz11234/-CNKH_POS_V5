@@ -11,8 +11,12 @@ from PySide6.QtWidgets import QApplication, QSpinBox, QTabWidget
 
 from cnkh_pos.database.bootstrap import bootstrap_database
 from cnkh_pos.database.connection import Database
-from cnkh_pos.services.auth import AuthService
-from cnkh_pos.services.barcode_labels import _barcode_drawing, load_product_label
+from cnkh_pos.services.auth import AuthService, AuthenticatedUser
+from cnkh_pos.services.barcode_labels import (
+    _barcode_drawing,
+    get_label_profile,
+    load_product_label,
+)
 from cnkh_pos.services.catalog import CatalogService, ProductInput
 from cnkh_pos.ui.admin.barcode_labels import BarcodeLabelsPage
 from cnkh_pos.ui.admin.window import AdminWindow
@@ -23,7 +27,7 @@ def _app() -> QApplication:
     return QApplication.instance() or QApplication([])
 
 
-def _database(root: Path) -> tuple[Database, int, object, int]:
+def _database(root: Path) -> tuple[Database, int, AuthenticatedUser, int]:
     database = Database(root / "hardware_pos.db")
     bootstrap_database(database.path, root / "backups")
     with database.transaction() as conn:
@@ -93,9 +97,7 @@ def test_admin_product_area_contains_barcode_labels_tab_without_replacing_existi
 
 def test_barcode_svg_is_valid_for_qt_renderer_used_by_windows_print_path() -> None:
     _app()
-    drawing = _barcode_drawing("4006381333931", __import__(
-        "cnkh_pos.services.barcode_labels", fromlist=["get_label_profile"]
-    ).get_label_profile("40x30"))
+    drawing = _barcode_drawing("4006381333931", get_label_profile("40x30"))
     renderer = QSvgRenderer(QByteArray(drawing.asString("svg")))
     assert renderer.isValid()
     image = QImage(400, 300, QImage.Format.Format_ARGB32)
