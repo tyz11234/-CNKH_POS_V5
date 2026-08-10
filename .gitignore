@@ -1,11 +1,16 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
 .coverage
 htmlcov/
 .venv/
 .testdeps/
-build/
+# Keep the two PyInstaller specifications in GitHub while ignoring generated
+# files that PyInstaller writes into the same directory.
+build/*
+!build/admin.spec
+!build/staff.spec
 dist/
 *.spec.bak
 *.db
@@ -14,3 +19,12 @@ dist/
 Backups/
 logs/
 release/
+release-package/
+ui-acceptance-artifacts/
+*.log
+*.xlsx
+*.pdf
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

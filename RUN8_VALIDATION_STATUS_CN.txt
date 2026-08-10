@@ -1,53 +1,92 @@
-CNKH Hardware POS V5 — Run #8 完善源码候选版验证状态
+CNKH Hardware POS V5 — Run #8 Stabilization 源码候选版验证状态
 
 版本：5.0.0-alpha.4
 日期：2026-08-10（Asia/Kuala_Lumpur）
-交付类型：完整源码候选版（不是已验收 Windows 安装版）
-GitHub：本轮没有连接、读取或修改用户的 GitHub
+交付等级：Source Candidate / 源码候选版（不是 Windows Installation Candidate）
+主线：02_CURRENT_WORK_IN_PROGRESS_SOURCE/CNKH_POS_V5/
+GitHub：用户已在后续对话中明确授权本项目使用 GitHub 最大权限；GitHub 插件已连接并设为 Full Access。
+当前会话执行器仍未暴露 GitHub 仓库/Actions 调用函数，且本地没有 gh、容器不能直连 github.com，因此本候选尚未实际 push 或触发 Windows Actions。不得把“已授权”写成“Actions 已通过”。
 
-一、已完成的本地验证
+一、本轮从当前源码重新执行并通过
 
-PASS — Python unittest：42/42
-PASS — pytest：42/42
-PASS — Source Self-Test：65 个 Python 文件、schema 7、版本 5.0.0-alpha.4
-PASS — Python compileall（排除第三方 .testdeps、缓存和构建目录）
-PASS — 关键 Ruff：E9、F63、F7、F82、F401、I
-PASS — Windows workflow YAML 可解析
-PASS — VERSION、Python package、pyproject、Inno Setup 版本一致
-PASS — fresh schema 7、schema 6→7、最新 schema 不重复建立 migration 备份
+PASS — pytest：58 passed + 4 subtests passed
+PASS — unittest（tests/）：58/58
+PASS — Source Self-Test：66 个 Python 文件、schema 7、版本 5.0.0-alpha.4
+PASS — Python compileall：cnkh_pos、tools、tests
+PASS — Windows workflow YAML：PyYAML 可解析
+PASS — 版本一致性：VERSION、Python package、pyproject、Inno Setup 全部为 5.0.0-alpha.4；workflow 从 VERSION 动态读取版本
+PASS — 数据库启动安全：fresh schema 7、schema 6→7、最新 schema 不重复 migration backup；缺必需表/列会阻断；foreign_key_check 损坏会阻断
+PASS — 备份完整性：新备份文件通过 SQLite PRAGMA integrity_check
+PASS — 重点回归组：14/14（报表退货扣除、Decimal 毛利、分页/Staff/进货行源码守卫、Excel 条码、部分退货、schema、备份、PDF、折扣、windowed JSON gate）
 
-二、Run #8 主要完成内容
+二、本轮新写入并已回归的稳定性修正
 
-1. Admin 员工账号：新增、编辑姓名/角色/权限、重设密码、启用/停用、自身与最后管理员保护。
-2. 客户：姓名、手机号、备注、新增、编辑、安全删除、欠款与带付款方式/备注的还款。
-3. 供应商：姓名、手机号、Email、备注、新增、编辑、安全删除、应付与带付款方式/备注的付款。
-4. 供应商商品目录：多对多关系；进货 UI 只显示所属商品，服务层也拒绝越权商品。
-5. 进货：重复商品合并、成本/库存 movement、安全删除、负库存阻止、付款 void 历史保留。
-6. Staff POS：真实商品分页、三项权限、购物车 +/−、四种付款、挂单选择与收银员隔离。
-7. 退货：折扣后净额、部分/多次退货、Credit 欠款调整、Cash/Card/DuitNow 退款方式。
-8. 打印：未选择/Windows 默认/指定打印机三种状态、离线错误、80mm 测试 PDF、收据折扣明细。
-9. 报表与日结：日期范围、精确 Decimal 毛利、开档现金、客户现金收款、供应商现金付款、现金退款。
-10. 数据维护：备份/恢复保护、关闭自动备份、30 份保留、Audit Log 密码保护清除与独立系统记录。
-11. 设置：收据、进货、退货和盘点单号前缀保存并用于之后的新单号。
-12. Windows 发布门禁：三档 DPI、两个 EXE 自检、Setup、静默安装、安装后两个自检、SHA-256 清单。
+1. Staff 购物车金额与折扣上限统一使用整数 sen + ROUND_HALF_UP；数量减少后折扣重新夹紧，不允许负折扣或折扣大于当前行金额。
+2. Admin 金额入口（付款、进货首付、Quick Amount、日结金额）统一走 rm_to_cents，避免 Python float/banker's rounding。
+3. 新增 schema 回归：即使 PRAGMA user_version 已是 7，缺必需列或存在外键损坏仍必须拒绝启动。
+4. 新增备份文件 integrity 回归。
+5. 新建进货表格继续保持 Product ID/Name 只读，数量/成本可编辑，逐行删除入口存在，并加入源码守卫。
+6. Windows release workflow 的四个 windowed self-test（packaged Admin/Staff、installed Admin/Staff）除了真实进程退出码，还强制要求 JSON 报告存在、status=PASS、mode 匹配。
+7. Staff 高 DPI 布局、分页、Dashboard ReportService Decimal 毛利路径加入当前源码回归守卫。
 
-三、尚未在当前环境真实执行
+三、本轮明确未通过 / 无法在当前执行环境真实完成
 
-BLOCKED — Linux Qt offscreen 启动：系统缺少 libEGL.so.1。
-NOT RUN — Windows GUI Acceptance 100%、125%、150%。
-NOT RUN — Admin/Staff EXE 构建及 packaged self-test。
-NOT RUN — Setup.exe 构建、静默安装及安装后 self-test。
-NOT RUN — 实体 Windows 80mm 打印机测试。
+BLOCKED — Ruff：当前环境没有 ruff；内部包源没有可安装版本，外部 PyPI 网络解析不可用。本轮不能把历史 Ruff PASS 记为当前 PASS。
+BLOCKED — Windows GUI Acceptance 100%：当前环境缺少 PySide6，实际启动得到 ModuleNotFoundError: No module named 'PySide6'。
+BLOCKED — Windows GUI Acceptance 125%：同上。
+BLOCKED — Windows GUI Acceptance 150%：同上。
+因此本轮没有新的 100%/125%/150% GUI 截图，不能进行要求中的新截图人工验收，也不能沿用旧截图作为当前 PASS。
 
-因此本包不得称为“正式发布版”或“已验收 Windows 安装版”，也不包含任何旧 EXE 或旧 Setup.exe。
+BLOCKED — 源码 Admin launcher --self-test：当前 Linux 环境缺 PySide6，退出码 1；但 FAIL JSON 诊断报告已成功写出，mode=admin、status=FAIL、异常与 traceback 完整。
+BLOCKED — 源码 Staff launcher --self-test：同上，mode=staff 的 FAIL JSON 成功写出。
 
-四、当前范围限制
+NOT RUN — Windows Admin EXE 构建与真实 packaged self-test。
+NOT RUN — Windows Staff EXE 构建与真实 packaged self-test。
+NOT RUN — Inno Setup Setup.exe 构建。
+NOT RUN — Windows 静默安装。
+NOT RUN — 安装后的 Admin/Staff EXE self-test。
+NOT RUN — 实体 Windows 80mm 打印机输出；自动 PDF 输出回归已通过，但不能替代实体打印机验收。
 
-- 没有代码签名证书；以后生成的 Setup.exe 仍可能触发 Windows SmartScreen。
-- 不包含 MyInvois、云端同步或多电脑服务器同步。
-- 未由 fixture 覆盖的未知 V4 数据库变体不能宣称全部兼容；升级前必须备份。
-- 换货采用可审计的“原销售退货 + 新销售”两步流程，尚无一键式独立换货单。
+当前执行环境事实：Linux x86_64、Python 3.13.5；pyinstaller、iscc、PowerShell/pwsh、Wine、PySide6、Ruff 均不可用。项目 Windows gate 目标仍是 Python 3.12。
 
-五、最终 Windows 可安装候选版门槛
+四、重点验证结论
 
-只有 Windows Release Gate 的三档真实鼠标 UI、Admin/Staff EXE、两个 packaged self-test、Setup.exe、静默安装及安装后两个 self-test 全部通过，才能交付新的 Windows 安装候选版。
+PASS（自动回归）— 报表退货按退货日期扣除；折扣后毛利使用 Decimal/整数 sen。
+PASS（自动 + 源码守卫）— Dashboard 读取 ReportService.summary().gross_profit_cents，不用 float 计算毛利。
+PASS（源码守卫；真实 GUI 被 PySide6 阻断）— Admin 分页使用 page_size+1；Windows acceptance 会建立 120 商品做分页流程。
+PASS（自动 + 源码守卫；真实 GUI 被阻断）— 新建进货 Product ID/Name 锁定，数量/成本可编辑、行可删除；已入账进货采用安全删除而不是静默改历史。
+PASS（自动回归）— Excel 条码只清洗“数值型末尾 .0”，不会破坏 ABC.0 等文本条码。
+PASS（自动回归）— 部分/多次/最终分段退货，最终段恢复精确剩余数量并消除舍入尾差。
+PASS（自动回归）— 数据库 schema 必需结构与外键安全检查。
+PASS（自动回归）— SQLite backup integrity。
+PASS（自动回归）— 收据 PDF 成功生成且非空；实体打印机仍待 Windows 硬件验收。
+PASS（源码守卫；真实三档 GUI 被阻断）— Staff 高 DPI 关键宽度/购物车控件约束仍在当前源码。
+PASS（自动回归）— 折扣上限随行金额夹紧，ROUND_HALF_UP 半分边界回归通过。
+PASS（源码/工作流回归）— Windowed self-test JSON 写入不依赖 console streams，Windows gate 强制检查报告 JSON；真实 EXE 仍待 Windows runner。
+
+五、固定安全限制
+
+- 不连接、读取或修改 GitHub，除非用户在当前对话另行明确授权。
+- 不索取密码、Token 或其他凭证。
+- 不删除、覆盖用户正式数据库或用户资料。
+- migration 必须可回滚；升级前只在 schema 需要迁移时创建完整备份；失败不得进入可写 UI。
+- 金额使用整数 sen；数量使用 Decimal。
+- Staff 不得看到 Admin 专属指标/功能。
+- 最终源码 ZIP 不得包含数据库、用户资料、缓存、旧 EXE、旧 Setup、旧 Windows Artifact。
+
+六、Windows Installation Candidate 的硬门槛
+
+只有在真实 Windows runner 上，下列项目基于同一份当前源码全部真实通过，才可改称 Windows Installation Candidate：
+100% / 125% / 150% 三档 GUI（含新截图人工检查）、Admin EXE、Staff EXE、两个 packaged self-test、Setup.exe、静默安装、安装后的 Admin self-test、安装后的 Staff self-test。
+
+本轮结论：Source Candidate。不得宣称 Windows Installation Candidate。
+七、GitHub-ready 追加门禁（尚待真实 Windows runner）
+
+- Windows workflow 新增 unittest discovery 与 compileall 独立步骤。
+- 安装后 Admin/Staff self-test 之后新增 normal-launch smoke test。
+- normal-launch smoke 使用临时 LOCALAPPDATA 建立测试 Admin/Staff 数据库，然后不带 --self-test 正常启动安装目录中的两个 EXE。
+- 必须分别观察到顶层窗口标题 `CNKH POS Admin Login` 与 `CNKH POS Staff Login` 且 MainWindowHandle 非 0，否则 workflow 失败。
+- normal-launch 结果写入 `self-test-artifacts/installed-normal-launch.json`，失败也保留诊断资料。
+- 这项用于补足 offscreen self-test 无法单独证明“安装后的普通 EXE 能真实打开”的证据缺口。
+
+当前结论仍为 Source Candidate / GitHub-ready Candidate；只有真实 Windows Actions 全链通过并人工检查三档新截图后，才能改称 Windows Installation Candidate。
