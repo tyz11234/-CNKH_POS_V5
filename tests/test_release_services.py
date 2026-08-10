@@ -13,7 +13,7 @@ from cnkh_pos.services.backup import BackupService
 from cnkh_pos.services.catalog import CatalogService, ProductInput
 from cnkh_pos.services.daily_closing import DailyClosingService
 from cnkh_pos.services.held_orders import HeldOrderService, cart_state_from_held_payload
-from cnkh_pos.services.printing import PrintingService
+from cnkh_pos.services.printing import RECEIPT_TEXT_WIDTH, PrintingService
 from cnkh_pos.services.restore import RestoreService
 from cnkh_pos.services.sales import SaleLine, SalesService
 
@@ -99,6 +99,20 @@ class ReleaseServiceTests(unittest.TestCase):
         self.assertEqual(receipt.sale_id, sale.sale_id)
         text = printing.render_text(receipt)
         self.assertIn(sale.receipt_no, text)
+        lines = text.splitlines()
+        self.assertLessEqual(max(map(len, lines)), RECEIPT_TEXT_WIDTH)
+        self.assertTrue(
+            any(line.startswith("SUBTOTAL") and line.endswith("RM 5.60") for line in lines)
+        )
+        self.assertTrue(
+            any(line.startswith("TOTAL") and line.endswith("RM 5.60") for line in lines)
+        )
+        self.assertTrue(
+            any(line.startswith("PAID") and line.endswith("RM 10.00") for line in lines)
+        )
+        self.assertTrue(
+            any(line.startswith("CHANGE") and line.endswith("RM 4.40") for line in lines)
+        )
         pdf = printing.render_pdf(receipt, self.root / "receipt.pdf")
         self.assertGreater(pdf.stat().st_size, 500)
         conn = self.database.connect(readonly=True)
@@ -119,7 +133,7 @@ class ReleaseServiceTests(unittest.TestCase):
             cashier_id=self.admin,
         )
         result = DailyClosingService(self.database).complete(
-            business_date=date.today(),
+            business_date=date.today().isoformat(),
             cashier_id=self.admin,
             actual_cash_cents=300,
             note="counted",
