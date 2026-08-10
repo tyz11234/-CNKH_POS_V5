@@ -1,3 +1,3 @@
-from cnkh_pos.ui.staff.window import StaffWindow
+from cnkh_pos.ui.staff.enhanced_window import StaffWindow
 
 __all__ = ["StaffWindow"]
