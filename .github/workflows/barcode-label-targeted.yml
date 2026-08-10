@@ -37,14 +37,19 @@ jobs:
           from PySide6.QtGui import QPageSize
           from PySide6.QtPrintSupport import QPrinter
           from PySide6.QtSvg import QSvgRenderer
+          from PySide6.QtWidgets import QApplication
 
+          app = QApplication.instance() or QApplication([])
           printer = QPrinter(QPrinter.PrinterMode.HighResolution)
           page = QPageSize(QSizeF(40, 30), QPageSize.Unit.Millimeter, '40x30')
+          assert page.isValid()
           printer.setPageSize(page)
           size = printer.pageLayout().pageSize().size(QPageSize.Unit.Millimeter)
+          print(f'QT CUSTOM MEDIA: {size.width():.3f} x {size.height():.3f} mm')
           assert abs(size.width() - 40.0) < 0.2, size.width()
           assert abs(size.height() - 30.0) < 0.2, size.height()
           assert QSvgRenderer is not None
+          app.processEvents()
           print('BARCODE LABEL QT MEDIA CHECK PASSED')
           '@ | python -
 
