@@ -7,11 +7,13 @@ on:
     paths:
       - "cnkh_pos/services/barcode_labels.py"
       - "cnkh_pos/services/checkout_rounding.py"
+      - "cnkh_pos/services/discounts.py"
       - "cnkh_pos/services/money.py"
       - "cnkh_pos/services/reports.py"
       - "cnkh_pos/ui/admin/barcode_labels.py"
       - "cnkh_pos/ui/admin/enhanced_data_pages.py"
       - "cnkh_pos/ui/admin/window.py"
+      - "cnkh_pos/ui/dialogs/discount.py"
       - "cnkh_pos/ui/dialogs/rounded_checkout.py"
       - "cnkh_pos/ui/staff/__init__.py"
       - "cnkh_pos/ui/staff/enhanced_window.py"
@@ -21,6 +23,7 @@ on:
       - "tests/test_barcode_labels_ui.py"
       - "tests/test_admin_new_controls.py"
       - "tests/test_checkout_rounding.py"
+      - "tests/test_discount_controls.py"
       - ".github/workflows/barcode-labels-gate.yml"
 
 permissions:
@@ -53,20 +56,22 @@ jobs:
           python -m ruff check
           cnkh_pos/services/barcode_labels.py
           cnkh_pos/services/checkout_rounding.py
+          cnkh_pos/services/discounts.py
           cnkh_pos/services/money.py
           cnkh_pos/services/reports.py
           cnkh_pos/ui/admin/barcode_labels.py
           cnkh_pos/ui/admin/enhanced_data_pages.py
           cnkh_pos/ui/admin/window.py
+          cnkh_pos/ui/dialogs/discount.py
           cnkh_pos/ui/dialogs/rounded_checkout.py
           cnkh_pos/ui/staff/__init__.py
           cnkh_pos/ui/staff/enhanced_window.py
-          build/admin.spec
           tests/test_barcode_labels.py
           tests/test_barcode_labels_integration.py
           tests/test_barcode_labels_ui.py
           tests/test_admin_new_controls.py
           tests/test_checkout_rounding.py
+          tests/test_discount_controls.py
       - name: Test only current additions
         run: >-
           python -m pytest -q
@@ -75,20 +80,24 @@ jobs:
           tests/test_barcode_labels_ui.py
           tests/test_admin_new_controls.py
           tests/test_checkout_rounding.py
+          tests/test_discount_controls.py
       - name: Compile only current additions
         run: >-
           python -m compileall -q
           cnkh_pos/services/barcode_labels.py
           cnkh_pos/services/checkout_rounding.py
+          cnkh_pos/services/discounts.py
           cnkh_pos/services/money.py
           cnkh_pos/services/reports.py
           cnkh_pos/ui/admin/barcode_labels.py
           cnkh_pos/ui/admin/enhanced_data_pages.py
           cnkh_pos/ui/admin/window.py
+          cnkh_pos/ui/dialogs/discount.py
           cnkh_pos/ui/dialogs/rounded_checkout.py
           cnkh_pos/ui/staff/enhanced_window.py
           tests/test_admin_new_controls.py
           tests/test_checkout_rounding.py
+          tests/test_discount_controls.py
       - name: Build Admin EXE with current additions
         run: pyinstaller --noconfirm --clean build/admin.spec
       - name: Packaged Admin self-test smoke
@@ -103,7 +112,7 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Admin self-test failed with exit code $($process.ExitCode)" }
           $result = Get-Content $report -Raw | ConvertFrom-Json
           if ($result.status -ne "PASS" -or $result.mode -ne "admin") { throw "Admin self-test did not report PASS/admin" }
-      - name: Build Staff EXE with rounded checkout
+      - name: Build Staff EXE with current additions
         run: pyinstaller --noconfirm --clean build/staff.spec
       - name: Packaged Staff self-test smoke
         shell: pwsh
