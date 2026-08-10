@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from cnkh_pos.services.money import format_myr, rm_to_cents, round_cash_change_cents
 from cnkh_pos.ui.dialogs.checkout import CheckoutDialog, SaleCompletedDialog
@@ -47,9 +46,9 @@ class CashRoundedSaleCompletedDialog(SaleCompletedDialog):
         method: str,
         parent=None,
     ):
-        # Do not call the base constructor because it derives change from paid-total.
-        # For cash sales the persisted rounded change can intentionally differ.
-        super(SaleCompletedDialog, self).__init__(parent)
+        # The base constructor derives change from paid-total. Cash checkout can
+        # intentionally differ, so build the same stable layout with persisted change.
+        QDialog.__init__(self, parent)
         self.print_requested = False
         self.setWindowTitle("Sale Completed / 销售完成")
         self.setMinimumWidth(520)
