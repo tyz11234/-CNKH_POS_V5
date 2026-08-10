@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,7 +42,7 @@ def resolve_printer_target(
 
 
 def _receipt_pair(left: object, right: object, *, width: int = RECEIPT_TEXT_WIDTH) -> str:
-    """Fit a left label/detail and right value into one thermal-receipt line."""
+    """Fit a left label/detail and right value into one plain-text receipt line."""
     left_text = str(left)
     right_text = str(right)
     if len(right_text) >= width:
@@ -177,6 +178,103 @@ class PrintingService:
         )
         return "\n".join(line for line in lines if line.strip())
 
+    @staticmethod
+    def render_html(receipt: Receipt) -> str:
+        """Render a width-safe thermal receipt for Qt printing.
+
+        Monetary values live in a dedicated right-aligned table column rather than
+        being positioned with spaces. This prevents clipping when a printer driver
+        reports a narrower printable area than the nominal 80 mm page width.
+        """
+
+        def esc(value: object) -> str:
+            return html.escape(str(value), quote=True)
+
+        def pair(left: object, right: object, *, css_class: str = "") -> str:
+            class_attr = f' class="{css_class}"' if css_class else ""
+            return (
+                f'<table{class_attr}><tr><td class="left">{esc(left)}</td>'
+                f'<td class="amount">{esc(right)}</td></tr></table>'
+            )
+
+        sections = [
+            '<div class="center store">'
+            + esc(receipt.settings.get("store_name", "CNKH Hardware"))
+            + "</div>",
+        ]
+        address = str(receipt.settings.get("address", "")).strip()
+        phone = str(receipt.settings.get("phone", "")).strip()
+        if address:
+            sections.append(f'<div class="center">{esc(address)}</div>')
+        if phone:
+            sections.append(f'<div class="center">{esc(phone)}</div>')
+        sections.extend(
+            [
+                '<div class="rule"></div>',
+                f'<div>Receipt: {esc(receipt.receipt_no)}</div>',
+                f'<div>Date: {esc(receipt.sold_at)}</div>',
+                f'<div>Cashier: {esc(receipt.cashier)}</div>',
+                '<div class="rule"></div>',
+            ]
+        )
+        for item in receipt.items:
+            sections.append(
+                f'<div class="product">{esc(item["product_name_snapshot"])}</div>'
+            )
+            qty = item["quantity_decimal"]
+            detail = (
+                f"{qty} {item['unit_snapshot']} x "
+                f"{format_myr(int(item['unit_price_cents']))}"
+            )
+            sections.append(
+                pair(detail, format_myr(int(item["subtotal_cents"])), css_class="item")
+            )
+            if int(item["discount_cents"]):
+                sections.append(
+                    pair(
+                        "Discount / 折扣",
+                        format_myr(-int(item["discount_cents"])),
+                        css_class="item",
+                    )
+                )
+        sections.extend(
+            [
+                '<div class="rule"></div>',
+                pair("SUBTOTAL", format_myr(receipt.subtotal_cents), css_class="summary"),
+                pair("DISCOUNT", format_myr(-receipt.discount_cents), css_class="summary"),
+                pair("TOTAL", format_myr(receipt.total_cents), css_class="summary total"),
+                pair("PAID", format_myr(receipt.paid_cents), css_class="summary"),
+                pair("CHANGE", format_myr(receipt.change_cents), css_class="summary"),
+                f'<div class="payment">Payment: {esc(receipt.payment_method)}</div>',
+                '<div class="rule"></div>',
+            ]
+        )
+        footer = str(receipt.settings.get("footer", "")).strip()
+        notes = str(receipt.settings.get("notes", "")).strip()
+        if footer:
+            sections.append(f'<div class="center">{esc(footer)}</div>')
+        if notes:
+            sections.append(f'<div class="center">{esc(notes)}</div>')
+
+        body = "".join(sections)
+        return f"""
+<html><head><style>
+html, body {{ margin: 0; padding: 0; }}
+body {{ font-family: Consolas, 'Courier New', monospace; font-size: 7.5pt; color: #000; }}
+.center {{ text-align: center; }}
+.store {{ font-weight: 700; margin-bottom: 1mm; }}
+.rule {{ border-top: 1px dashed #000; margin: 1.5mm 0; height: 0; }}
+.product {{ margin-top: 0.8mm; overflow-wrap: anywhere; }}
+table {{ width: 100%; border-collapse: collapse; table-layout: fixed; margin: 0; padding: 0; }}
+td {{ margin: 0; padding: 0; vertical-align: top; }}
+td.left {{ width: 68%; overflow-wrap: anywhere; }}
+td.amount {{ width: 32%; text-align: right; white-space: nowrap; }}
+table.summary td.left {{ font-weight: 600; }}
+table.total td {{ font-weight: 800; }}
+.payment {{ margin-top: 0.8mm; }}
+</style></head><body>{body}</body></html>
+""".strip()
+
     def render_pdf(self, receipt: Receipt, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         text = self.render_text(receipt)
@@ -221,15 +319,7 @@ class PrintingService:
                 printer.setPrinterName(target)
         document = QTextDocument()
         document.setDocumentMargin(0)
-        escaped = (
-            self.render_text(receipt)
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-        )
-        document.setHtml(
-            f"<pre style='font-family:Consolas;font-size:7.5pt;margin:0'>{escaped}</pre>"
-        )
+        document.setHtml(self.render_html(receipt))
         document.print_(printer)
         if printer.printerState() == QPrinter.PrinterState.Error:
             raise RuntimeError("printer reported an error while sending the receipt")
