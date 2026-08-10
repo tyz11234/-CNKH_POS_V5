@@ -381,38 +381,121 @@ table.total td {{ font-weight: 800; }}
     def print_receipt(
         self, receipt: Receipt, *, output_pdf: Path | None = None
     ) -> None:
-        """Print through Qt. Tests can select PDF output without requiring hardware."""
-        from PySide6.QtCore import QMarginsF, QSizeF
-        from PySide6.QtGui import QPageLayout, QPageSize, QTextDocument
+        """Print the verified 80mm PDF layout through Qt at thermal-printer DPI."""
+        import tempfile
+
+        from PySide6.QtCore import (
+            QBuffer,
+            QByteArray,
+            QIODevice,
+            QMarginsF,
+            QRectF,
+            QSize,
+            QSizeF,
+            Qt,
+        )
+        from PySide6.QtGui import QPageLayout, QPageSize, QPainter
+        from PySide6.QtPdf import QPdfDocument
         from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
 
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setPageSize(
-            QPageSize(QSizeF(80, 297), QPageSize.Unit.Millimeter, "80mm")
-        )
-        printer.setPageMargins(
-            QMarginsF(4, 4, 4, 4), QPageLayout.Unit.Millimeter
-        )
-        if output_pdf is not None:
-            output_pdf.parent.mkdir(parents=True, exist_ok=True)
-            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-            printer.setOutputFileName(str(output_pdf))
-        else:
-            available = set(QPrinterInfo.availablePrinterNames())
-            target = resolve_printer_target(
-                receipt.settings,
-                available_printers=available,
-                default_printer_available=not QPrinterInfo.defaultPrinter().isNull(),
+        target_pdf = Path(output_pdf) if output_pdf is not None else None
+        with tempfile.TemporaryDirectory() as folder:
+            source_pdf = Path(folder) / "receipt-layout.pdf"
+            self.render_pdf(receipt, source_pdf)
+
+            # Load from memory rather than asking QPdfDocument to keep the Windows
+            # file open. This prevents the PDF engine from blocking temp cleanup.
+            source_data = QByteArray(source_pdf.read_bytes())
+            source_pdf.unlink()
+            buffer = QBuffer()
+            buffer.setData(source_data)
+            if not buffer.open(QIODevice.OpenModeFlag.ReadOnly):
+                raise RuntimeError("receipt PDF buffer could not be opened")
+            document = QPdfDocument()
+            document.load(buffer)
+            if document.pageCount() != 1:
+                document.close()
+                buffer.close()
+                raise RuntimeError("receipt PDF could not be loaded for printing")
+            page_points = document.pagePointSize(0)
+            if page_points.width() <= 0 or page_points.height() <= 0:
+                document.close()
+                buffer.close()
+                raise RuntimeError("receipt PDF reported an invalid page size")
+
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            if target_pdf is not None:
+                target_pdf.parent.mkdir(parents=True, exist_ok=True)
+                printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+                printer.setOutputFileName(str(target_pdf))
+            else:
+                available = set(QPrinterInfo.availablePrinterNames())
+                target = resolve_printer_target(
+                    receipt.settings,
+                    available_printers=available,
+                    default_printer_available=not QPrinterInfo.defaultPrinter().isNull(),
+                )
+                if target is not None:
+                    printer.setPrinterName(target)
+
+            # 203 dpi is the dominant resolution for retail 80mm thermal printers.
+            # Rasterizing the already-verified PDF avoids the QTextDocument/Windows
+            # font-path corruption that can turn receipt glyphs into black blocks.
+            printer.setResolution(203)
+            source_height_mm = float(page_points.height()) * 25.4 / 72.0
+            paper_height_mm = max(297.0, source_height_mm)
+            printer.setPageSize(
+                QPageSize(
+                    QSizeF(80.0, paper_height_mm),
+                    QPageSize.Unit.Millimeter,
+                    "80mm Receipt",
+                )
             )
-            if target is not None:
-                printer.setPrinterName(target)
-        document = QTextDocument()
-        document.setDocumentMargin(0)
-        document.setHtml(self.render_html(receipt))
-        document.print_(printer)
-        if printer.printerState() == QPrinter.PrinterState.Error:
-            raise RuntimeError("printer reported an error while sending the receipt")
-        if output_pdf is not None and (
-            not output_pdf.is_file() or output_pdf.stat().st_size == 0
-        ):
-            raise RuntimeError("PDF receipt output was not created")
+            printer.setPageMargins(
+                QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter
+            )
+            printer.setFullPage(True)
+
+            dpi = max(203, int(printer.resolution()))
+            render_size = QSize(
+                max(1, int(round(float(page_points.width()) * dpi / 72.0))),
+                max(1, int(round(float(page_points.height()) * dpi / 72.0))),
+            )
+            image = document.render(0, render_size)
+            if image.isNull():
+                document.close()
+                buffer.close()
+                raise RuntimeError("receipt PDF could not be rasterized for printing")
+
+            painter = QPainter(printer)
+            if not painter.isActive():
+                document.close()
+                buffer.close()
+                raise RuntimeError("printer could not start an 80mm receipt print job")
+            try:
+                page_rect = printer.pageLayout().fullRectPixels(dpi)
+                painter.fillRect(QRectF(page_rect), Qt.GlobalColor.white)
+                scale = min(
+                    float(page_rect.width()) / float(image.width()),
+                    float(page_rect.height()) / float(image.height()),
+                )
+                draw_width = float(image.width()) * scale
+                draw_height = float(image.height()) * scale
+                target_rect = QRectF(
+                    float(page_rect.x()) + (float(page_rect.width()) - draw_width) / 2.0,
+                    float(page_rect.y()),
+                    draw_width,
+                    draw_height,
+                )
+                painter.drawImage(target_rect, image)
+            finally:
+                painter.end()
+                document.close()
+                buffer.close()
+
+            if printer.printerState() == QPrinter.PrinterState.Error:
+                raise RuntimeError("printer reported an error while sending the receipt")
+            if target_pdf is not None and (
+                not target_pdf.is_file() or target_pdf.stat().st_size == 0
+            ):
+                raise RuntimeError("PDF receipt output was not created")

@@ -12,6 +12,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QSize
+from PySide6.QtPdf import QPdfDocument
 from PySide6.QtWidgets import QApplication
 
 from cnkh_pos.database.bootstrap import bootstrap_database
@@ -112,6 +114,31 @@ def test_final_barcode_label_and_80mm_receipt_evidence() -> None:
         assert reportlab_pdf.stat().st_size > 500
         assert qt_pdf.is_file() and qt_pdf.stat().st_size > 500
 
+        # Render the PDF that has passed through the actual Qt/QPrinter path.
+        # The old QTextDocument regression collapsed normal glyphs into a narrow
+        # column of black rectangles; require receipt content to span the page.
+        qt_document = QPdfDocument()
+        qt_document.load(str(qt_pdf))
+        assert qt_document.pageCount() == 1
+        preview = qt_document.render(0, QSize(400, 1485))
+        assert not preview.isNull()
+        preview_path = EVIDENCE_DIR / "final-receipt-qt-80mm-preview.png"
+        assert preview.save(str(preview_path), "PNG")
+        qt_document.close()
+
+        from PIL import Image, ImageOps
+
+        with Image.open(preview_path) as preview_image:
+            grayscale = preview_image.convert("L")
+            ink = ImageOps.invert(grayscale).point(
+                lambda value: 255 if value >= 32 else 0
+            )
+            bbox = ink.getbbox()
+            preview_width = grayscale.width
+        assert bbox is not None
+        qt_ink_width_ratio = (bbox[2] - bbox[0]) / preview_width
+        assert qt_ink_width_ratio >= 0.65
+
         payload = {
             "status": "PASS",
             "label": {
@@ -135,6 +162,7 @@ def test_final_barcode_label_and_80mm_receipt_evidence() -> None:
                 "reportlab_bytes": reportlab_pdf.stat().st_size,
                 "qt_pdf": qt_pdf.name,
                 "qt_bytes": qt_pdf.stat().st_size,
+                "qt_ink_width_ratio": round(qt_ink_width_ratio, 4),
             },
         }
         (EVIDENCE_DIR / "final-print-evidence.json").write_text(
