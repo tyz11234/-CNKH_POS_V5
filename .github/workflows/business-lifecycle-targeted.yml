@@ -31,20 +31,17 @@ jobs:
         run: python -m pip install -r requirements-build.txt
       - name: Compile Qt resources
         run: pyside6-rcc resources/resources.qrc -o cnkh_pos/resources_rc.py
-      - name: Ruff business lifecycle harness
-        run: python -m ruff check tools/windows_business_acceptance.py
-      - name: Compile business lifecycle harness
-        run: python -m compileall -q tools/windows_business_acceptance.py
-      - name: Run full business lifecycle harness
-        shell: pwsh
-        run: |
-          $env:CNKH_POS_BUSINESS_ACCEPTANCE_DIR = (Join-Path $PWD "business-acceptance-artifacts")
-          python -m tools.windows_business_acceptance
+      - name: Ruff official business lifecycle test
+        run: python -m ruff check tests/test_full_business_lifecycle.py
+      - name: Compile official business lifecycle test
+        run: python -m compileall -q tests/test_full_business_lifecycle.py
+      - name: Run official full Windows business lifecycle
+        run: python -m pytest -q tests/test_full_business_lifecycle.py
       - name: Upload business lifecycle evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: Business-Lifecycle-Targeted-Evidence
-          path: business-acceptance-artifacts/
+          path: self-test-artifacts/full-business-acceptance.json
           if-no-files-found: error
           retention-days: 14
