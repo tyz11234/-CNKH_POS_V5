@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 
 
 class Database:
@@ -14,7 +14,7 @@ class Database:
 
     def connect(self, *, readonly: bool = False) -> sqlite3.Connection:
         if readonly:
-            uri = f"file:{self.path.as_posix()}?mode=ro"
+            uri = self.path.resolve().as_uri() + "?mode=ro"
             conn = sqlite3.connect(uri, uri=True, timeout=10.0)
         else:
             self.path.parent.mkdir(parents=True, exist_ok=True)

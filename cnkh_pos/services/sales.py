@@ -316,6 +316,9 @@ class ReturnService:
     ) -> str:
         if not quantities_by_sale_item:
             raise SaleError("return has no items")
+        reason = reason.strip()
+        if not reason:
+            raise SaleError("return reason is required")
         with self.database.transaction() as conn:
             sale = conn.execute("SELECT * FROM sales WHERE id=?", (sale_id,)).fetchone()
             if sale is None:
@@ -344,7 +347,8 @@ class ReturnService:
                     raise SaleError("sale item does not belong to sale")
                 sold = parse_quantity(item["quantity_decimal"])
                 prior_returns = conn.execute(
-                    """SELECT sri.quantity_decimal,sri.refund_cents
+                    """SELECT sri.quantity_decimal,sri.stock_restored_decimal,
+                              sri.refund_cents
                        FROM sale_return_items sri
                        JOIN sale_returns sr ON sr.id=sri.return_id
                        WHERE sri.sale_item_id=?""",
@@ -357,11 +361,21 @@ class ReturnService:
                 if quantity + already_quantity > sold:
                     raise SaleError("return quantity exceeds sold quantity")
                 deduction = parse_quantity(item["stock_deduction_decimal"])
-                stock_restore = (
-                    (deduction * quantity / sold)
-                    .quantize(Decimal("0.000001"))
-                    .normalize()
+                restored_before = sum(
+                    (
+                        parse_quantity(row["stock_restored_decimal"])
+                        for row in prior_returns
+                    ),
+                    Decimal("0"),
                 )
+                if quantity + already_quantity == sold:
+                    stock_restore = max(Decimal("0"), deduction - restored_before)
+                else:
+                    stock_restore = (
+                        (deduction * quantity / sold)
+                        .quantize(Decimal("0.000001"))
+                        .normalize()
+                    )
                 line_net = int(item["subtotal_cents"])
                 refunded_before = sum(int(row["refund_cents"]) for row in prior_returns)
                 if quantity + already_quantity == sold:

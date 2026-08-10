@@ -29,7 +29,7 @@ class AppPaths:
     receipts: Path
 
     @classmethod
-    def default(cls) -> "AppPaths":
+    def default(cls) -> AppPaths:
         root = _local_app_data() / APP_NAME
         return cls(
             root=root,

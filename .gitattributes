@@ -1,0 +1,14 @@
+* text=auto
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.qss text eol=lf
+*.qrc text eol=lf
+*.svg text eol=lf
+*.iss text eol=crlf
+*.exe binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.db binary

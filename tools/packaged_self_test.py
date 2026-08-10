@@ -1,11 +1,44 @@
 from __future__ import annotations
 
+import json
 import os
+import sys
 import tempfile
+import traceback
+from datetime import datetime
 from pathlib import Path
 
+REPORT_ENV = "CNKH_POS_SELF_TEST_REPORT"
 
-def run(mode: str) -> int:
+
+def _write_report(path: Path | None, payload: dict[str, object]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _safe_console(message: str) -> None:
+    """Windowed PyInstaller executables may expose no stdout or stderr."""
+    for stream in (getattr(sys, "stdout", None), getattr(sys, "stderr", None)):
+        if stream is None:
+            continue
+        try:
+            stream.write(message + "\n")
+            stream.flush()
+            return
+        except (AttributeError, OSError, ValueError):
+            continue
+
+
+def _run_checks(mode: str) -> dict[str, object]:
+    if mode not in {"admin", "staff"}:
+        raise ValueError(f"unsupported self-test mode: {mode}")
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtWidgets import QApplication
 
@@ -57,10 +90,54 @@ def run(mode: str) -> int:
         window.show()
         app.processEvents()
         if not window.isVisible() or window.minimumWidth() <= 0:
-            return 3
+            raise RuntimeError("application window did not become visible")
         window.close()
+        app.processEvents()
         ok, _ = database.integrity_check()
         if not ok or result.schema_after <= 0:
-            return 4
-    print(f"PACKAGED {mode.upper()} SELF-TEST PASSED")
+            raise RuntimeError("temporary self-test database failed validation")
+        return {
+            "mode": mode,
+            "schema": result.schema_after,
+            "window_minimum_width": window.minimumWidth(),
+        }
+
+
+def run(mode: str) -> int:
+    configured_report = os.environ.get(REPORT_ENV, "").strip()
+    report_path = Path(configured_report) if configured_report else None
+    started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    try:
+        details = _run_checks(mode)
+    except BaseException as exc:
+        payload = {
+            "status": "FAIL",
+            "mode": mode,
+            "started_at": started_at,
+            "finished_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "exception_type": type(exc).__name__,
+            "error": str(exc),
+            "traceback": "".join(
+                traceback.format_exception(type(exc), exc, exc.__traceback__)
+            ),
+        }
+        try:
+            _write_report(report_path, payload)
+        except (OSError, ValueError):
+            pass
+        _safe_console(f"PACKAGED {mode.upper()} SELF-TEST FAILED: {exc}")
+        return 1
+
+    payload = {
+        "status": "PASS",
+        "started_at": started_at,
+        "finished_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        **details,
+    }
+    try:
+        _write_report(report_path, payload)
+    except (OSError, ValueError) as exc:
+        _safe_console(f"PACKAGED {mode.upper()} SELF-TEST REPORT FAILED: {exc}")
+        return 2
+    _safe_console(f"PACKAGED {mode.upper()} SELF-TEST PASSED")
     return 0

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.money import format_myr
+from cnkh_pos.services.reports import ReportService
 from cnkh_pos.ui.widgets import Card, StatCard
 
 
@@ -95,21 +96,11 @@ class DashboardPage(QWidget):
 
     def refresh(self) -> None:
         business_date = date.today().isoformat()
+        summary = ReportService(self.database).summary(
+            start_date=business_date, end_date=business_date
+        )
         conn = self.database.connect(readonly=True)
         try:
-            today_sales, today_count = conn.execute(
-                """SELECT COALESCE(SUM(total_cents),0), COUNT(*) FROM sales
-                   WHERE is_deleted=0 AND substr(sold_at,1,10)=?""",
-                (business_date,),
-            ).fetchone()
-            profit = conn.execute(
-                """SELECT COALESCE(SUM(
-                       (si.unit_price_cents-si.unit_cost_cents_snapshot)
-                       * CAST(si.quantity_decimal AS REAL)-si.discount_cents),0)
-                   FROM sale_items si JOIN sales s ON s.id=si.sale_id
-                   WHERE s.is_deleted=0 AND substr(s.sold_at,1,10)=?""",
-                (business_date,),
-            ).fetchone()[0]
             low_stock = conn.execute(
                 """SELECT COUNT(*) FROM products WHERE is_deleted=0
                    AND CAST(low_stock_decimal AS REAL)>0
@@ -154,9 +145,9 @@ class DashboardPage(QWidget):
             conn.close()
 
         values = {
-            "today_sales": (format_myr(int(today_sales)), "今日实际数据"),
-            "today_count": (str(int(today_count)), "今日实际数据"),
-            "profit": (format_myr(round(float(profit))), "按销售成本计算"),
+            "today_sales": (format_myr(summary.sales_cents), "已扣除今日退货"),
+            "today_count": (str(summary.transaction_count), "今日实际数据"),
+            "profit": (format_myr(summary.gross_profit_cents), "精确成本并扣除退货"),
             "low_stock": (str(int(low_stock)), "需要及时补货"),
             "receivable": (
                 format_myr(int(receivable)),
@@ -197,7 +188,9 @@ class DashboardPage(QWidget):
                 "#168A3F",
             ),
         ]
-        for label, (text, color) in zip(self.notification_labels, notifications):
+        for label, (text, color) in zip(
+            self.notification_labels, notifications, strict=True
+        ):
             label.setText(text)
             label.setStyleSheet(f"color:{color}; padding:4px 0;")
 

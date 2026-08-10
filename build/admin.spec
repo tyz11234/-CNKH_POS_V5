@@ -4,7 +4,10 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_submodules
 
 project_root = Path(SPECPATH).parent
-hiddenimports = collect_submodules('PySide6')
+hiddenimports = (
+    collect_submodules('PySide6')
+    + collect_submodules('reportlab.graphics.barcode')
+)
 datas = [(str(project_root / 'resources'), 'resources'),
          (str(project_root / 'VERSION'), '.')]
 a = Analysis([str(project_root / 'admin_launcher.py')],

@@ -7,7 +7,7 @@
 1. 只读打开并运行 `PRAGMA integrity_check`。
 2. 读取 `PRAGMA user_version`；只有 schema 低于目标版本时，才使用 SQLite backup API 创建带时间戳的完整副本。
 3. 在 `BEGIN IMMEDIATE` 单一事务中执行尚未应用的 migrations。
-4. 写入 `schema_migrations` 和 `PRAGMA user_version` 后 commit。
+4. 写入 `schema_migrations` 和 `PRAGMA user_version` 后，在提交前/启动门禁中验证必需表、必需列与 `PRAGMA foreign_key_check`；不能只相信 `user_version`。
 5. 任一步失败即 rollback，抛出 `DatabaseStartupError`，应用不得进入可写 UI。
 
 目标 schema 为 **7**。Migration 7 新增：
@@ -33,3 +33,7 @@ V5 检测旧表的实际列，而不假设某个 V4 schema。金额来源优先�
 ## Version policy
 
 Migration 只可向前、不可静默降级。应用版本低于数据库 schema 时拒绝启动。每个 migration 都必须有 old-schema fixture 测试。当前自动测试覆盖 fresh schema 7、schema 6→7，以及已是 schema 7 时不重复备份；未由 fixture 覆盖的未知 V4 变体不能宣称已兼容。
+## Backup integrity
+
+SQLite backup API 完成复制后，目标备份必须重新执行 `PRAGMA integrity_check` 并得到唯一结果 `ok`。任何 integrity 失败都会删除刚生成的目标文件并抛出错误，避免把损坏副本当作可恢复备份。
+

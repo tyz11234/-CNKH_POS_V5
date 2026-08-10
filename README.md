@@ -2,7 +2,7 @@
 
 Windows 离线 POS + Inventory 系统。V5 使用 **Python 3.12、PySide6 / Qt 6 与 SQLite**，不会覆盖或修改 V4 源代码。
 
-> 当前状态：`5.0.0-alpha.4 / Run #8 Completion Source Candidate`。本地服务测试、源码自检、Python 编译和关键静态检查已经完成；当前 Linux 环境缺少 `libEGL.so.1`，因此 100%/125%/150% Windows GUI、EXE、Setup 和安装后自检仍必须在真实 Windows runner 通过后，才能称为 Windows 可安装候选版。
+> 当前状态：`5.0.0-alpha.4 / Run #8 Stabilization Source Candidate`。2026-08-10 已从当前源码重新通过 pytest、unittest、Source Self-Test、compileall、workflow YAML、版本一致性与数据库结构/外键回归；本执行环境没有 PySide6 且无法取得 Ruff，因此三档 GUI 与 Ruff 本轮为 BLOCKED。Admin/Staff EXE、Setup、静默安装及安装后两个自检仍必须在真实 Windows runner 全部通过后，才能称为 Windows Installation Candidate。
 
 ## Run #8 主要完成内容
 

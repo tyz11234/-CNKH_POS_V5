@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -92,8 +93,14 @@ class PagedTablePage(QWidget):
         return button
 
     def set_rows(self, rows: list[tuple[object, ...]]) -> None:
-        self.table.setRowCount(len(rows))
-        for r, values in enumerate(rows):
+        if not rows and self.offset > 0:
+            self.offset = max(0, self.offset - self.page_size)
+            self.refresh()
+            return
+        has_more = len(rows) > self.page_size
+        visible_rows = rows[: self.page_size]
+        self.table.setRowCount(len(visible_rows))
+        for r, values in enumerate(visible_rows):
             for c, value in enumerate(values):
                 item = QTableWidgetItem("" if value is None else str(value))
                 if c == 0:
@@ -101,7 +108,7 @@ class PagedTablePage(QWidget):
                 self.table.setItem(r, c, item)
         self.page_label.setText(f"Page {self.offset // self.page_size + 1}")
         self.previous.setEnabled(self.offset > 0)
-        self.next.setEnabled(len(rows) == self.page_size)
+        self.next.setEnabled(has_more)
 
     def selected_id(self) -> int | None:
         row = self.table.currentRow()
@@ -242,7 +249,7 @@ class ProductsPage(PagedTablePage):
                 """SELECT id, name, COALESCE(sku,''), COALESCE(barcode,''),
                    printf('RM %.2f', selling_price_cents/100.0), stock_decimal, unit, location
                    FROM products WHERE is_deleted=0 ORDER BY name COLLATE NOCASE LIMIT ? OFFSET ?""",
-                (self.page_size, self.offset),
+                (self.page_size + 1, self.offset),
             ).fetchall()
             self.set_rows([tuple(row) for row in rows])
         finally:
@@ -399,25 +406,34 @@ class ReturnSaleDialog(QDialog):
         conn = self.database.connect(readonly=True)
         try:
             rows = conn.execute(
-                """SELECT si.id,si.product_name_snapshot,si.quantity_decimal,
-                          COALESCE(SUM(CAST(sri.quantity_decimal AS REAL)),0) returned
-                   FROM sale_items si
-                   LEFT JOIN sale_return_items sri ON sri.sale_item_id=si.id
-                   WHERE si.sale_id=? GROUP BY si.id ORDER BY si.id""",
+                """SELECT id,product_name_snapshot,quantity_decimal
+                   FROM sale_items WHERE sale_id=? ORDER BY id""",
                 (self.sale_id,),
             ).fetchall()
+            returned_by_item: dict[int, Decimal] = {}
+            for returned_row in conn.execute(
+                """SELECT sri.sale_item_id,sri.quantity_decimal
+                   FROM sale_return_items sri
+                   JOIN sale_items si ON si.id=sri.sale_item_id
+                   WHERE si.sale_id=?""",
+                (self.sale_id,),
+            ):
+                item_id = int(returned_row["sale_item_id"])
+                returned_by_item[item_id] = returned_by_item.get(
+                    item_id, Decimal("0")
+                ) + Decimal(str(returned_row["quantity_decimal"]))
         finally:
             conn.close()
         self.table.setRowCount(len(rows))
         for row_index, row in enumerate(rows):
             sold = Decimal(str(row["quantity_decimal"]))
-            returned = Decimal(str(row["returned"]))
+            returned = returned_by_item.get(int(row["id"]), Decimal("0"))
             remaining = max(Decimal("0"), sold - returned)
             values = (row["id"], row["product_name_snapshot"], sold, returned, remaining)
             for column, value in enumerate(values):
                 self.table.setItem(row_index, column, QTableWidgetItem(str(value)))
             quantity = QDoubleSpinBox()
-            quantity.setDecimals(3)
+            quantity.setDecimals(6)
             quantity.setRange(0, float(remaining))
             self.table.setCellWidget(row_index, 5, quantity)
 
@@ -462,7 +478,7 @@ class SalesPage(PagedTablePage):
         try:
             rows = conn.execute(
                 "SELECT id, receipt_no, sold_at, printf('RM %.2f', total_cents/100.0), payment_method, CASE is_deleted WHEN 0 THEN 'COMPLETED' ELSE 'DELETED' END FROM sales ORDER BY sold_at DESC LIMIT ? OFFSET ?",
-                (self.page_size, self.offset),
+                (self.page_size + 1, self.offset),
             ).fetchall()
             self.set_rows([tuple(row) for row in rows])
         finally:
@@ -533,7 +549,7 @@ class RecordPaymentDialog(QDialog):
 
     def value(self) -> tuple[int, str, str]:
         return (
-            round(self.amount.value() * 100),
+            rm_to_cents(self.amount.value()),
             self.method.currentText(),
             self.note.toPlainText().strip(),
         )
@@ -559,8 +575,8 @@ class NewPurchaseDialog(QDialog):
             self.supplier.addItem(str(row["name"]), int(row["id"]))
         self.product = QComboBox()
         self.quantity = QDoubleSpinBox()
-        self.quantity.setDecimals(3)
-        self.quantity.setRange(0.001, 999999)
+        self.quantity.setDecimals(6)
+        self.quantity.setRange(0.000001, 999999)
         self.quantity.setValue(1)
         self.cost = QDoubleSpinBox()
         self.cost.setDecimals(2)
@@ -575,14 +591,16 @@ class NewPurchaseDialog(QDialog):
         form.addRow("Purchase Cost RM", self.cost)
         form.addRow("", add_item)
         root.addLayout(form)
-        self.items = QTableWidget(0, 4)
+        self.items = QTableWidget(0, 5)
         self.items.setHorizontalHeaderLabels(
-            ["Product ID", "Product", "Quantity", "Purchase Cost RM"]
+            ["Product ID", "Product", "Quantity", "Purchase Cost RM", "Remove"]
         )
         self.items.horizontalHeader().setSectionResizeMode(
             QHeaderView.ResizeMode.Stretch
         )
+        self.items.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         root.addWidget(self.items)
+        root.addWidget(QLabel("双击 Quantity 或 Purchase Cost 可直接修改，无需重新加入商品。"))
         payment_form = QFormLayout()
         self.paid = QDoubleSpinBox()
         self.paid.setDecimals(2)
@@ -596,7 +614,7 @@ class NewPurchaseDialog(QDialog):
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._validate_and_accept)
         buttons.rejected.connect(self.reject)
         self.save_button = buttons.button(QDialogButtonBox.StandardButton.Save)
         root.addWidget(buttons)
@@ -655,33 +673,72 @@ class NewPurchaseDialog(QDialog):
                 return
         row = self.items.rowCount()
         self.items.insertRow(row)
-        for col, value in enumerate(
-            (
-                product_id,
-                self.product.currentText(),
-                self.quantity.value(),
-                f"{self.cost.value():.2f}",
+        values = (
+            product_id,
+            self.product.currentText(),
+            self.quantity.value(),
+            f"{self.cost.value():.2f}",
+        )
+        for col, value in enumerate(values):
+            item = QTableWidgetItem(str(value))
+            if col in (0, 1):
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.items.setItem(row, col, item)
+        remove = QPushButton("×")
+        remove.setObjectName("DangerButton")
+        remove.clicked.connect(lambda checked=False, button=remove: self._remove_item(button))
+        self.items.setCellWidget(row, 4, remove)
+
+    def _remove_item(self, button: QPushButton) -> None:
+        for row in range(self.items.rowCount()):
+            if self.items.cellWidget(row, 4) is button:
+                self.items.removeRow(row)
+                return
+
+    def _validated_lines(self) -> list[PurchaseLine]:
+        if self.items.rowCount() == 0:
+            raise ValueError("purchase has no items")
+        lines: list[PurchaseLine] = []
+        for row in range(self.items.rowCount()):
+            quantity = Decimal(self.items.item(row, 2).text().strip())
+            if not quantity.is_finite() or quantity <= 0:
+                raise ValueError(f"row {row + 1}: quantity must be positive")
+            unit_cost_cents = rm_to_cents(self.items.item(row, 3).text())
+            lines.append(
+                PurchaseLine(
+                    int(self.items.item(row, 0).text()),
+                    quantity,
+                    unit_cost_cents,
+                )
             )
-        ):
-            self.items.setItem(row, col, QTableWidgetItem(str(value)))
+        return lines
+
+    def _validate_and_accept(self) -> None:
+        try:
+            lines = self._validated_lines()
+            total_cents = sum(
+                int(
+                    (Decimal(line.unit_cost_cents) * line.quantity).quantize(
+                        Decimal("1"), rounding=ROUND_HALF_UP
+                    )
+                )
+                for line in lines
+            )
+            if rm_to_cents(self.paid.value()) > total_cents:
+                raise ValueError("initial paid amount exceeds purchase total")
+        except (ArithmeticError, ValueError) as exc:
+            QMessageBox.warning(self, "Purchase", str(exc))
+            return
+        self.accept()
 
     def value(self) -> tuple[int, list[PurchaseLine], int, str]:
         if self.supplier.currentData() is None:
             raise ValueError("supplier is required")
-        if self.items.rowCount() == 0:
-            raise ValueError("purchase has no items")
-        lines = [
-            PurchaseLine(
-                int(self.items.item(row, 0).text()),
-                Decimal(self.items.item(row, 2).text()),
-                round(float(self.items.item(row, 3).text()) * 100),
-            )
-            for row in range(self.items.rowCount())
-        ]
+        lines = self._validated_lines()
         return (
             int(self.supplier.currentData()),
             lines,
-            round(self.paid.value() * 100),
+            rm_to_cents(self.paid.value()),
             self.method.currentText(),
         )
 
@@ -708,7 +765,7 @@ class PurchasesPage(PagedTablePage):
                    printf('RM %.2f',p.total_cents/100.0), printf('RM %.2f',p.paid_cents/100.0), p.status
                    FROM purchases p LEFT JOIN suppliers s ON s.id=p.supplier_id
                    ORDER BY p.purchased_at DESC LIMIT ? OFFSET ?""",
-                (self.page_size, self.offset),
+                (self.page_size + 1, self.offset),
             ).fetchall()
             self.set_rows([tuple(row) for row in rows])
         finally:
@@ -930,7 +987,7 @@ class EntityPage(PagedTablePage):
                               printf('RM %.2f',COALESCE(SUM(d.balance_cents),0)/100.0)
                        FROM customers c LEFT JOIN customer_debts d ON d.customer_id=c.id AND d.status='OPEN'
                        WHERE c.is_deleted=0 GROUP BY c.id ORDER BY c.name LIMIT ? OFFSET ?""",
-                    (self.page_size, self.offset),
+                    (self.page_size + 1, self.offset),
                 ).fetchall()
             else:
                 rows = conn.execute(
@@ -938,7 +995,7 @@ class EntityPage(PagedTablePage):
                               printf('RM %.2f',COALESCE(SUM(p.total_cents-p.paid_cents),0)/100.0)
                        FROM suppliers s LEFT JOIN purchases p ON p.supplier_id=s.id
                        WHERE s.is_deleted=0 GROUP BY s.id ORDER BY s.name LIMIT ? OFFSET ?""",
-                    (self.page_size, self.offset),
+                    (self.page_size + 1, self.offset),
                 ).fetchall()
             self.set_rows([tuple(row) for row in rows])
         finally:
@@ -1146,7 +1203,7 @@ class StocktakeCountDialog(QDialog):
                 self.table.setItem(row_index, column, QTableWidgetItem(str(value)))
             control = QDoubleSpinBox()
             control.setObjectName("PhysicalCountInput")
-            control.setDecimals(3)
+            control.setDecimals(6)
             control.setRange(0, 999999999)
             control.setValue(float(physical))
             control.valueChanged.connect(
@@ -1192,7 +1249,7 @@ class StocktakePage(PagedTablePage):
         try:
             rows = conn.execute(
                 "SELECT id,stocktake_no,started_at,COALESCE(completed_at,''),product_count,variance_count,status FROM stocktakes ORDER BY started_at DESC LIMIT ? OFFSET ?",
-                (self.page_size, self.offset),
+                (self.page_size + 1, self.offset),
             ).fetchall()
             self.set_rows([tuple(row) for row in rows])
         finally:
@@ -1241,7 +1298,7 @@ class AuditPage(PagedTablePage):
         try:
             rows = conn.execute(
                 "SELECT id,occurred_at,username_snapshot,action,module,record_type||' #'||record_id,COALESCE(old_value_json,''),COALESCE(new_value_json,'') FROM audit_logs ORDER BY occurred_at DESC,id DESC LIMIT ? OFFSET ?",
-                (self.page_size, self.offset),
+                (self.page_size + 1, self.offset),
             ).fetchall()
             self.set_rows([tuple(row) for row in rows])
         finally:

@@ -1,53 +1,56 @@
-CNKH Hardware POS V5 — Run #8 完善源码候选版验证状态
+CNKH Hardware POS V5 — Run #8 Stabilization 最终 Windows 验证状态
 
 版本：5.0.0-alpha.4
-日期：2026-08-10（Asia/Kuala_Lumpur）
-交付类型：完整源码候选版（不是已验收 Windows 安装版）
-GitHub：本轮没有连接、读取或修改用户的 GitHub
+日期：2026-08-11（Asia/Kuala_Lumpur）
+当前分支：ci/run8-githubready-20260810
+目标：Windows Installation Candidate
 
-一、已完成的本地验证
+一、当前已完成并有真实 Windows runner 证据的项目
 
-PASS — Python unittest：42/42
-PASS — pytest：42/42
-PASS — Source Self-Test：65 个 Python 文件、schema 7、版本 5.0.0-alpha.4
-PASS — Python compileall（排除第三方 .testdeps、缓存和构建目录）
-PASS — 关键 Ruff：E9、F63、F7、F82、F401、I
-PASS — Windows workflow YAML 可解析
-PASS — VERSION、Python package、pyproject、Inno Setup 版本一致
-PASS — fresh schema 7、schema 6→7、最新 schema 不重复建立 migration 备份
+PASS — Ruff lint。
+PASS — pytest / unittest / compileall / Source Self-Test。
+PASS — 完整业务生命周期自动模拟：管理员/员工、客户、供应商、商品新增/编辑/删除、自动/手动 Barcode、进货与付款、库存变化、Staff 销售、% / RM Discount、结账进位、挂单/取单、退货、销售记录删除、盘点、报表、Excel、条码标签、80mm 小票、备份/恢复。
+PASS — Windows GUI Acceptance 100% / 125% / 150%。
+PASS — Admin EXE / Staff EXE PyInstaller 构建。
+PASS — packaged Admin / Staff self-test。
+PASS — Setup.exe 构建与静默安装。
+PASS — installed Admin / Staff self-test。
+PASS — installed Admin / Staff normal-launch smoke，必须观察到真实登录窗口。
+PASS — release manifest / release package / Windows Artifact 上传链（Run #92）。
 
-二、Run #8 主要完成内容
+二、本阶段新增并已验证的功能
 
-1. Admin 员工账号：新增、编辑姓名/角色/权限、重设密码、启用/停用、自身与最后管理员保护。
-2. 客户：姓名、手机号、备注、新增、编辑、安全删除、欠款与带付款方式/备注的还款。
-3. 供应商：姓名、手机号、Email、备注、新增、编辑、安全删除、应付与带付款方式/备注的付款。
-4. 供应商商品目录：多对多关系；进货 UI 只显示所属商品，服务层也拒绝越权商品。
-5. 进货：重复商品合并、成本/库存 movement、安全删除、负库存阻止、付款 void 历史保留。
-6. Staff POS：真实商品分页、三项权限、购物车 +/−、四种付款、挂单选择与收银员隔离。
-7. 退货：折扣后净额、部分/多次退货、Credit 欠款调整、Cash/Card/DuitNow 退款方式。
-8. 打印：未选择/Windows 默认/指定打印机三种状态、离线错误、80mm 测试 PDF、收据折扣明细。
-9. 报表与日结：日期范围、精确 Decimal 毛利、开档现金、客户现金收款、供应商现金付款、现金退款。
-10. 数据维护：备份/恢复保护、关闭自动备份、30 份保留、Audit Log 密码保护清除与独立系统记录。
-11. 设置：收据、进货、退货和盘点单号前缀保存并用于之后的新单号。
-12. Windows 发布门禁：三档 DPI、两个 EXE 自检、Setup、静默安装、安装后两个自检、SHA-256 清单。
+1. 商品条码标签打印：商品页新增 Barcode Labels；支持常见热敏标签尺寸，默认 50×30 mm；打印张数可自定义 1–999；支持 Windows 打印对话框与 PDF 证据输出。
+2. 新增商品 Barcode：可明确选择“系统自动生成 EAN-13”或“手动输入”，继续使用原 CatalogService 唯一性校验。
+3. 销售记录删除：按现有数据架构安全处理，不允许用破坏库存/报表一致性的裸 SQL 删除。
+4. 结账进位：Cash/Card/QR 使用用户指定规则，例如 RM0.67→RM0.70、RM0.42→RM0.40、RM0.45 保持；原始 subtotal/discount 与 rounding 调整分开记录；Credit 欠账不做现金进位。
+5. Discount：购物车与结账支持 % 或固定 RM 金额，并真实进入应付、销售明细、小票、退货与报表。
+6. 80mm 小票：修复金额右侧裁切；后续人工证据又发现 Qt QTextDocument 打印路径出现黑块/乱码，已改为“先生成已验证 ReportLab 80mm PDF，再由 QtPdf 在 203dpi 热敏分辨率栅格化送入 QPrinter”。Focused Windows Run #3 已通过 Ruff、打印回归和实际 Qt 输出可读性门禁；新 Qt 小票人工确认中文、商品行及 RM 金额完整可读，有效内容横向覆盖率 0.7925。
 
-三、尚未在当前环境真实执行
+三、标签与打印规格
 
-BLOCKED — Linux Qt offscreen 启动：系统缺少 libEGL.so.1。
-NOT RUN — Windows GUI Acceptance 100%、125%、150%。
-NOT RUN — Admin/Staff EXE 构建及 packaged self-test。
-NOT RUN — Setup.exe 构建、静默安装及安装后 self-test。
-NOT RUN — 实体 Windows 80mm 打印机测试。
+- 商品条码标签默认：50×30 mm。
+- 其他常见标签尺寸仍保留可选。
+- 标签张数：1–999 可自定义。
+- 80mm 小票：Windows 默认打印机或指定打印机；自动环境可生成 PDF 证据。
+- 实体热敏打印机硬件仍只能在真实门店设备上做最终物理出纸确认；云端 Windows runner 可以验证 Windows 打印路径、页面尺寸、PDF/Qt 渲染与 EXE 打包。
 
-因此本包不得称为“正式发布版”或“已验收 Windows 安装版”，也不包含任何旧 EXE 或旧 Setup.exe。
+四、最终发布硬门槛
 
-四、当前范围限制
+同一个最终 commit 必须全部通过：Ruff、完整业务测试、unittest、compileall、Source Self-Test、100/125/150% GUI、Admin/Staff EXE、packaged self-tests、Setup.exe、silent install、installed self-tests、installed normal-launch、manifest/package、Artifact；并人工检查最终 GUI/打印证据。
 
-- 没有代码签名证书；以后生成的 Setup.exe 仍可能触发 Windows SmartScreen。
-- 不包含 MyInvois、云端同步或多电脑服务器同步。
-- 未由 fixture 覆盖的未知 V4 数据库变体不能宣称全部兼容；升级前必须备份。
-- 换货采用可审计的“原销售退货 + 新销售”两步流程，尚无一键式独立换货单。
+Run #92 曾整条 Windows gate 绿色，但人工检查抓到 Qt 80mm 黑块，因此没有签为最终 Candidate。该真实缺陷已通过 focused Windows test 修复。随后条码标签默认规格调整为 50×30 mm，并同步所有相关测试。
 
-五、最终 Windows 可安装候选版门槛
+当前状态：必须以本文件这次提交后触发的最新完整 Windows Release Gate 为最终依据。不得把较早 Run 的绿色结果拼接成最终通过。
 
-只有 Windows Release Gate 的三档真实鼠标 UI、Admin/Staff EXE、两个 packaged self-test、Setup.exe、静默安装及安装后两个 self-test 全部通过，才能交付新的 Windows 安装候选版。
+五、安全与数据规则
+
+- 不索取密码、Token 或其他凭证。
+- 不删除或覆盖正式数据库/用户资料。
+- migration 必须可回滚，升级前按规则备份。
+- 金额使用整数 sen；数量使用 Decimal。
+- Staff 不得获得 Admin 专属权限。
+- 最终源码包不得包含真实数据库、用户数据、缓存、旧 EXE/Setup/Windows Artifact。
+- 当前 GitHub 操作已由用户在本对话明确授权本项目最大权限。
+
+当前结论：最终 Windows Release Gate 重跑中；在最新 commit 全链成功并人工证据复核完成之前，不宣称最终完成。

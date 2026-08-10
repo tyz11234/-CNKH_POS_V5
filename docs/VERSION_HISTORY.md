@@ -17,6 +17,11 @@
 
 ### Fixed
 
+- Staff 购物车行金额、折扣上限与 Admin 金额输入统一使用整数 sen + `ROUND_HALF_UP`，数量下降后折扣会重新夹紧到当前行金额。
+- 新建进货行的 Product ID/Name 保持只读，数量/成本可编辑，并保留逐行删除入口与保存校验。
+- 数据库启动校验会拒绝“user_version 正确但必需表/列缺失”以及外键损坏的数据库。
+- 新备份完成后必须通过 SQLite `PRAGMA integrity_check`，失败的目标备份会被删除。
+- Windows windowed EXE self-test gate 除真实进程退出码外，现在还强制要求 JSON 报告存在且 `status=PASS`、mode 匹配。
 - 供应商目录不再只靠 UI 过滤，服务层会拒绝不属于该供应商的商品。
 - 重复进货商品会合并数量，删除进货不会令库存变成负数。
 - 折扣销售退货按原行净额退款，最后一次退货消除四舍五入差额。

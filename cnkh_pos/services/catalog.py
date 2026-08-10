@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from cnkh_pos.database.connection import Database
 from cnkh_pos.database.migrations import utc_now_text
@@ -95,9 +95,7 @@ class CatalogService:
                 user_id=admin_id,
                 record_type="PRODUCT",
                 record_id=product_id,
-                new_value={**data.__dict__, "barcode": barcode}
-                if hasattr(data, "__dict__")
-                else {"name": data.name, "barcode": barcode},
+                new_value={**asdict(data), "barcode": barcode},
             )
             return product_id
 

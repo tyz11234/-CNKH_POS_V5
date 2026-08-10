@@ -31,7 +31,12 @@ from cnkh_pos.config import AppPaths
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.held_orders import HeldOrderService, cart_state_from_held_payload
-from cnkh_pos.services.money import format_myr
+from cnkh_pos.services.money import (
+    clamp_discount_cents,
+    format_myr,
+    line_amount_cents,
+    rm_to_cents,
+)
 from cnkh_pos.services.printing import PrintingService
 from cnkh_pos.services.product_search import search_products
 from cnkh_pos.services.sales import SaleLine, SalesService
@@ -198,6 +203,14 @@ class StaffWindow(QMainWindow):
         self.cart.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
         )
+        self.cart.horizontalHeader().setSectionResizeMode(
+            2, QHeaderView.ResizeMode.Fixed
+        )
+        self.cart.horizontalHeader().resizeSection(2, 116)
+        for column in (1, 3, 4, 5):
+            self.cart.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
         self.cart.verticalHeader().setVisible(False)
         self.cart.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         layout.addWidget(self.cart, 1)
@@ -207,6 +220,10 @@ class StaffWindow(QMainWindow):
         total.addStretch(1)
         self.total_label = QLabel("RM 0.00")
         self.total_label.setObjectName("MoneyHero")
+        self.total_label.setMinimumWidth(220)
+        self.total_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         total.addWidget(self.total_label)
         layout.addLayout(total)
 
@@ -498,15 +515,17 @@ class StaffWindow(QMainWindow):
                     continue
                 row = self.cart.rowCount()
                 self.cart.insertRow(row)
-                discount_cents = self.cart_discounts.get(product_id, 0)
-                subtotal = (
-                    int(
-                        (Decimal(product["selling_price_cents"]) * quantity).quantize(
-                            Decimal("1")
-                        )
-                    )
-                    - discount_cents
+                gross_cents = line_amount_cents(
+                    int(product["selling_price_cents"]), quantity
                 )
+                discount_cents = clamp_discount_cents(
+                    self.cart_discounts.get(product_id, 0), gross_cents
+                )
+                if discount_cents:
+                    self.cart_discounts[product_id] = discount_cents
+                else:
+                    self.cart_discounts.pop(product_id, None)
+                subtotal = gross_cents - discount_cents
                 values = (
                     product["name"],
                     format_myr(product["selling_price_cents"]),
@@ -523,17 +542,21 @@ class StaffWindow(QMainWindow):
                 quantity_widget.setProperty("productId", product_id)
                 quantity_layout = QHBoxLayout(quantity_widget)
                 quantity_layout.setContentsMargins(0, 0, 0, 0)
+                quantity_layout.setSpacing(2)
                 minus = QPushButton("−")
                 minus.setObjectName("CartQuantityMinus")
                 minus.setProperty("productId", product_id)
+                minus.setFixedWidth(22)
                 plus = QPushButton("+")
                 plus.setObjectName("CartQuantityPlus")
                 plus.setProperty("productId", product_id)
+                plus.setFixedWidth(22)
                 spin = QDoubleSpinBox()
                 spin.setObjectName("CartQuantityValue")
                 spin.setProperty("productId", product_id)
                 spin.setDecimals(3)
                 spin.setRange(0, 999999)
+                spin.setFixedWidth(66)
                 spin.setValue(float(quantity))
                 minus.clicked.connect(
                     lambda checked=False, pid=product_id: self._change_quantity(
@@ -554,6 +577,7 @@ class StaffWindow(QMainWindow):
                 quantity_layout.addWidget(spin)
                 quantity_layout.addWidget(plus)
                 self.cart.setCellWidget(row, 2, quantity_widget)
+                self.cart.setRowHeight(row, 44)
                 remove = QPushButton("×")
                 remove.setObjectName("DangerButton")
                 remove.clicked.connect(
@@ -580,16 +604,19 @@ class StaffWindow(QMainWindow):
             return 0
         conn = self.database.connect(readonly=True)
         try:
-            total = Decimal("0")
+            total = 0
             for product_id, quantity in self.cart_quantities.items():
                 row = conn.execute(
                     "SELECT selling_price_cents FROM products WHERE id=?", (product_id,)
                 ).fetchone()
                 if row:
-                    total += Decimal(
-                        row["selling_price_cents"]
-                    ) * quantity - self.cart_discounts.get(product_id, 0)
-            return int(total.quantize(Decimal("1")))
+                    gross = line_amount_cents(
+                        int(row["selling_price_cents"]), quantity
+                    )
+                    total += gross - clamp_discount_cents(
+                        self.cart_discounts.get(product_id, 0), gross
+                    )
+            return total
         finally:
             conn.close()
 
@@ -603,7 +630,24 @@ class StaffWindow(QMainWindow):
             self._remove_cart(product_id)
         else:
             self.cart_quantities[product_id] = quantity
+            maximum = self._maximum_discount(product_id)
+            if self.cart_discounts.get(product_id, 0) > maximum:
+                self.cart_discounts[product_id] = maximum
             self._rebuild_cart()
+
+    def _maximum_discount(self, product_id: int) -> int:
+        quantity = self.cart_quantities.get(product_id, Decimal("0"))
+        conn = self.database.connect(readonly=True)
+        try:
+            row = conn.execute(
+                "SELECT selling_price_cents FROM products WHERE id=? AND is_deleted=0",
+                (product_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            return 0
+        return line_amount_cents(int(row["selling_price_cents"]), quantity)
 
     def _edit_discount(self) -> None:
         row = self.cart.currentRow()
@@ -613,17 +657,18 @@ class StaffWindow(QMainWindow):
         product_id = int(self.cart.item(row, 0).data(Qt.ItemDataRole.UserRole))
         from PySide6.QtWidgets import QInputDialog
 
+        maximum = self._maximum_discount(product_id)
         amount, ok = QInputDialog.getDouble(
             self,
             "Discount",
             "Discount RM",
-            self.cart_discounts.get(product_id, 0) / 100,
+            min(self.cart_discounts.get(product_id, 0), maximum) / 100,
             0,
-            100000,
+            maximum / 100,
             2,
         )
         if ok:
-            self.cart_discounts[product_id] = round(amount * 100)
+            self.cart_discounts[product_id] = rm_to_cents(amount)
             self._rebuild_cart()
 
     def _quick_amounts(self) -> list[int]:

@@ -1,16 +1,89 @@
 from __future__ import annotations
 
+import html
 import json
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen.canvas import Canvas
 
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.money import format_myr
 
 WINDOWS_DEFAULT_PRINTER = "__WINDOWS_DEFAULT__"
+RECEIPT_TEXT_WIDTH = 40
+RECEIPT_PDF_CJK_FONT = "STSong-Light"
+
+
+def _character_width(character: str) -> int:
+    return 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+
+
+def _display_width(value: object) -> int:
+    return sum(_character_width(character) for character in str(value))
+
+
+def _truncate_display(value: object, width: int) -> str:
+    result: list[str] = []
+    used = 0
+    for character in str(value):
+        character_width = _character_width(character)
+        if used + character_width > width:
+            break
+        result.append(character)
+        used += character_width
+    return "".join(result)
+
+
+def _truncate_display_tail(value: object, width: int) -> str:
+    result: list[str] = []
+    used = 0
+    for character in reversed(str(value)):
+        character_width = _character_width(character)
+        if used + character_width > width:
+            break
+        result.append(character)
+        used += character_width
+    return "".join(reversed(result))
+
+
+def _center_display(value: object, width: int = RECEIPT_TEXT_WIDTH) -> str:
+    text = _truncate_display(str(value).strip(), width)
+    remaining = max(0, width - _display_width(text))
+    left = remaining // 2
+    return (" " * left) + text + (" " * (remaining - left))
+
+
+def _wrap_display(value: object, width: int = RECEIPT_TEXT_WIDTH) -> list[str]:
+    normalized = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    wrapped: list[str] = []
+    for logical_line in normalized.split("\n"):
+        text = logical_line.strip()
+        if not text:
+            continue
+        chunk: list[str] = []
+        used = 0
+        for character in text:
+            character_width = _character_width(character)
+            if chunk and used + character_width > width:
+                wrapped.append("".join(chunk).rstrip())
+                chunk = []
+                used = 0
+            chunk.append(character)
+            used += character_width
+        if chunk:
+            wrapped.append("".join(chunk).rstrip())
+    return wrapped
+
+
+def _centered_setting_lines(
+    value: object, width: int = RECEIPT_TEXT_WIDTH
+) -> list[str]:
+    return [_center_display(line, width) for line in _wrap_display(value, width)]
 
 
 def resolve_printer_target(
@@ -37,6 +110,18 @@ def resolve_printer_target(
     raise RuntimeError(
         "no printer has been selected; choose Windows default or a named printer in Admin Settings"
     )
+
+
+def _receipt_pair(left: object, right: object, *, width: int = RECEIPT_TEXT_WIDTH) -> str:
+    """Fit a left label/detail and right value into one plain-text receipt line."""
+    right_text = str(right)
+    right_width = _display_width(right_text)
+    if right_width >= width:
+        return _truncate_display_tail(right_text, width)
+    left_width = width - right_width
+    left_text = _truncate_display(left, left_width)
+    padding = max(0, left_width - _display_width(left_text))
+    return f"{left_text}{' ' * padding}{right_text}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,50 +209,170 @@ class PrintingService:
 
     @staticmethod
     def render_text(receipt: Receipt) -> str:
-        width = 42
-        lines = [
-            str(receipt.settings.get("store_name", "CNKH Hardware")).center(width),
-            str(receipt.settings.get("address", "")).center(width),
-            str(receipt.settings.get("phone", "")).center(width),
-            "-" * width,
-            f"Receipt: {receipt.receipt_no}",
-            f"Date: {receipt.sold_at}",
-            f"Cashier: {receipt.cashier}",
-            "-" * width,
-        ]
+        width = RECEIPT_TEXT_WIDTH
+        lines: list[str] = []
+        lines.extend(
+            _centered_setting_lines(
+                receipt.settings.get("store_name", "CNKH Hardware"), width
+            )
+        )
+        lines.extend(_centered_setting_lines(receipt.settings.get("address", ""), width))
+        lines.extend(_centered_setting_lines(receipt.settings.get("phone", ""), width))
+        lines.extend(
+            [
+                "-" * width,
+                _truncate_display(f"Receipt: {receipt.receipt_no}", width),
+                _truncate_display(f"Date: {receipt.sold_at}", width),
+                _truncate_display(f"Cashier: {receipt.cashier}", width),
+                "-" * width,
+            ]
+        )
         for item in receipt.items:
-            lines.append(str(item["product_name_snapshot"])[:width])
+            lines.append(_truncate_display(item["product_name_snapshot"], width))
             qty = item["quantity_decimal"]
             detail = f"  {qty} {item['unit_snapshot']} x {format_myr(int(item['unit_price_cents']))}"
-            lines.append(f"{detail:<30}{format_myr(int(item['subtotal_cents'])):>12}")
+            lines.append(
+                _receipt_pair(detail, format_myr(int(item["subtotal_cents"])), width=width)
+            )
             if int(item["discount_cents"]):
                 lines.append(
-                    f"  Discount / 折扣{format_myr(-int(item['discount_cents'])):>25}"
+                    _receipt_pair(
+                        "  Discount / 折扣",
+                        format_myr(-int(item["discount_cents"])),
+                        width=width,
+                    )
                 )
         lines.extend(
             [
                 "-" * width,
-                f"SUBTOTAL{format_myr(receipt.subtotal_cents):>34}",
-                f"DISCOUNT{format_myr(-receipt.discount_cents):>34}",
-                f"TOTAL{format_myr(receipt.total_cents):>37}",
-                f"PAID{format_myr(receipt.paid_cents):>38}",
-                f"CHANGE{format_myr(receipt.change_cents):>36}",
-                f"Payment: {receipt.payment_method}",
+                _receipt_pair("SUBTOTAL", format_myr(receipt.subtotal_cents), width=width),
+                _receipt_pair("DISCOUNT", format_myr(-receipt.discount_cents), width=width),
+                _receipt_pair("TOTAL", format_myr(receipt.total_cents), width=width),
+                _receipt_pair("PAID", format_myr(receipt.paid_cents), width=width),
+                _receipt_pair("CHANGE", format_myr(receipt.change_cents), width=width),
+                _truncate_display(f"Payment: {receipt.payment_method}", width),
                 "-" * width,
-                str(receipt.settings.get("footer", "")).center(width),
-                str(receipt.settings.get("notes", "")).center(width),
             ]
         )
+        lines.extend(_centered_setting_lines(receipt.settings.get("footer", ""), width))
+        lines.extend(_centered_setting_lines(receipt.settings.get("notes", ""), width))
         return "\n".join(line for line in lines if line.strip())
 
+    @staticmethod
+    def render_html(receipt: Receipt) -> str:
+        """Render a width-safe thermal receipt for Qt printing.
+
+        Monetary values live in a dedicated right-aligned table column rather than
+        being positioned with spaces. This prevents clipping when a printer driver
+        reports a narrower printable area than the nominal 80 mm page width.
+        """
+
+        def esc(value: object) -> str:
+            return html.escape(str(value), quote=True)
+
+        def pair(left: object, right: object, *, css_class: str = "") -> str:
+            class_attr = f' class="{css_class}"' if css_class else ""
+            return (
+                f'<table{class_attr}><tr><td class="left">{esc(left)}</td>'
+                f'<td class="amount">{esc(right)}</td></tr></table>'
+            )
+
+        sections = [
+            '<div class="center store">'
+            + esc(receipt.settings.get("store_name", "CNKH Hardware"))
+            + "</div>",
+        ]
+        address = str(receipt.settings.get("address", "")).strip()
+        phone = str(receipt.settings.get("phone", "")).strip()
+        if address:
+            sections.append(f'<div class="center">{esc(address)}</div>')
+        if phone:
+            sections.append(f'<div class="center">{esc(phone)}</div>')
+        sections.extend(
+            [
+                '<div class="rule"></div>',
+                f'<div>Receipt: {esc(receipt.receipt_no)}</div>',
+                f'<div>Date: {esc(receipt.sold_at)}</div>',
+                f'<div>Cashier: {esc(receipt.cashier)}</div>',
+                '<div class="rule"></div>',
+            ]
+        )
+        for item in receipt.items:
+            sections.append(
+                f'<div class="product">{esc(item["product_name_snapshot"])}</div>'
+            )
+            qty = item["quantity_decimal"]
+            detail = (
+                f"{qty} {item['unit_snapshot']} x "
+                f"{format_myr(int(item['unit_price_cents']))}"
+            )
+            sections.append(
+                pair(detail, format_myr(int(item["subtotal_cents"])), css_class="item")
+            )
+            if int(item["discount_cents"]):
+                sections.append(
+                    pair(
+                        "Discount / 折扣",
+                        format_myr(-int(item["discount_cents"])),
+                        css_class="item",
+                    )
+                )
+        sections.extend(
+            [
+                '<div class="rule"></div>',
+                pair("SUBTOTAL", format_myr(receipt.subtotal_cents), css_class="summary"),
+                pair("DISCOUNT", format_myr(-receipt.discount_cents), css_class="summary"),
+                pair("TOTAL", format_myr(receipt.total_cents), css_class="summary total"),
+                pair("PAID", format_myr(receipt.paid_cents), css_class="summary"),
+                pair("CHANGE", format_myr(receipt.change_cents), css_class="summary"),
+                f'<div class="payment">Payment: {esc(receipt.payment_method)}</div>',
+                '<div class="rule"></div>',
+            ]
+        )
+        footer = str(receipt.settings.get("footer", "")).strip()
+        notes = str(receipt.settings.get("notes", "")).strip()
+        if footer:
+            sections.append(f'<div class="center">{esc(footer)}</div>')
+        if notes:
+            sections.append(f'<div class="center">{esc(notes)}</div>')
+
+        body = "".join(sections)
+        return f"""
+<html><head><style>
+html, body {{ margin: 0; padding: 0; }}
+body {{ font-family: Consolas, 'Microsoft YaHei UI', 'Microsoft YaHei', SimSun, 'Courier New', monospace; font-size: 7.5pt; color: #000; }}
+.center {{ text-align: center; overflow-wrap: anywhere; }}
+.store {{ font-weight: 700; margin-bottom: 1mm; }}
+.rule {{ border-top: 1px dashed #000; margin: 1.5mm 0; height: 0; }}
+.product {{ margin-top: 0.8mm; overflow-wrap: anywhere; }}
+table {{ width: 100%; border-collapse: collapse; table-layout: fixed; margin: 0; padding: 0; }}
+td {{ margin: 0; padding: 0; vertical-align: top; }}
+td.left {{ width: 68%; overflow-wrap: anywhere; }}
+td.amount {{ width: 32%; text-align: right; white-space: nowrap; }}
+table.summary td.left {{ font-weight: 600; }}
+table.total td {{ font-weight: 800; }}
+.payment {{ margin-top: 0.8mm; }}
+</style></head><body>{body}</body></html>
+""".strip()
+
     def render_pdf(self, receipt: Receipt, path: Path) -> Path:
+        path.parent.mkdir(parents=True, exist_ok=True)
         text = self.render_text(receipt)
         line_height = 4.2 * mm
         height = max(120 * mm, (text.count("\n") + 5) * line_height)
+        try:
+            pdfmetrics.getFont(RECEIPT_PDF_CJK_FONT)
+        except KeyError:
+            pdfmetrics.registerFont(UnicodeCIDFont(RECEIPT_PDF_CJK_FONT))
         canvas = Canvas(str(path), pagesize=(80 * mm, height))
-        canvas.setFont("Courier", 7.5)
         y = height - 8 * mm
         for line in text.splitlines():
+            font_name = (
+                RECEIPT_PDF_CJK_FONT
+                if any(ord(character) > 127 for character in line)
+                else "Courier"
+            )
+            canvas.setFont(font_name, 7.5)
             canvas.drawString(4 * mm, y, line)
             y -= line_height
         canvas.save()
@@ -176,35 +381,121 @@ class PrintingService:
     def print_receipt(
         self, receipt: Receipt, *, output_pdf: Path | None = None
     ) -> None:
-        """Print through Qt. Tests can select PDF output without requiring hardware."""
-        from PySide6.QtCore import QSizeF
-        from PySide6.QtGui import QPageSize, QTextDocument
+        """Print the verified 80mm PDF layout through Qt at thermal-printer DPI."""
+        import tempfile
+
+        from PySide6.QtCore import (
+            QBuffer,
+            QByteArray,
+            QIODevice,
+            QMarginsF,
+            QRectF,
+            QSize,
+            QSizeF,
+            Qt,
+        )
+        from PySide6.QtGui import QPageLayout, QPageSize, QPainter
+        from PySide6.QtPdf import QPdfDocument
         from PySide6.QtPrintSupport import QPrinter, QPrinterInfo
 
-        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setPageSize(
-            QPageSize(QSizeF(80, 297), QPageSize.Unit.Millimeter, "80mm")
-        )
-        if output_pdf is not None:
-            printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
-            printer.setOutputFileName(str(output_pdf))
-        else:
-            available = set(QPrinterInfo.availablePrinterNames())
-            target = resolve_printer_target(
-                receipt.settings,
-                available_printers=available,
-                default_printer_available=not QPrinterInfo.defaultPrinter().isNull(),
+        target_pdf = Path(output_pdf) if output_pdf is not None else None
+        with tempfile.TemporaryDirectory() as folder:
+            source_pdf = Path(folder) / "receipt-layout.pdf"
+            self.render_pdf(receipt, source_pdf)
+
+            # Load from memory rather than asking QPdfDocument to keep the Windows
+            # file open. This prevents the PDF engine from blocking temp cleanup.
+            source_data = QByteArray(source_pdf.read_bytes())
+            source_pdf.unlink()
+            buffer = QBuffer()
+            buffer.setData(source_data)
+            if not buffer.open(QIODevice.OpenModeFlag.ReadOnly):
+                raise RuntimeError("receipt PDF buffer could not be opened")
+            document = QPdfDocument()
+            document.load(buffer)
+            if document.pageCount() != 1:
+                document.close()
+                buffer.close()
+                raise RuntimeError("receipt PDF could not be loaded for printing")
+            page_points = document.pagePointSize(0)
+            if page_points.width() <= 0 or page_points.height() <= 0:
+                document.close()
+                buffer.close()
+                raise RuntimeError("receipt PDF reported an invalid page size")
+
+            printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+            if target_pdf is not None:
+                target_pdf.parent.mkdir(parents=True, exist_ok=True)
+                printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+                printer.setOutputFileName(str(target_pdf))
+            else:
+                available = set(QPrinterInfo.availablePrinterNames())
+                target = resolve_printer_target(
+                    receipt.settings,
+                    available_printers=available,
+                    default_printer_available=not QPrinterInfo.defaultPrinter().isNull(),
+                )
+                if target is not None:
+                    printer.setPrinterName(target)
+
+            # 203 dpi is the dominant resolution for retail 80mm thermal printers.
+            # Rasterizing the already-verified PDF avoids the QTextDocument/Windows
+            # font-path corruption that can turn receipt glyphs into black blocks.
+            printer.setResolution(203)
+            source_height_mm = float(page_points.height()) * 25.4 / 72.0
+            paper_height_mm = max(297.0, source_height_mm)
+            printer.setPageSize(
+                QPageSize(
+                    QSizeF(80.0, paper_height_mm),
+                    QPageSize.Unit.Millimeter,
+                    "80mm Receipt",
+                )
             )
-            if target is not None:
-                printer.setPrinterName(target)
-        document = QTextDocument()
-        escaped = (
-            self.render_text(receipt)
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-        )
-        document.setHtml(
-            f"<pre style='font-family:Consolas;font-size:8pt'>{escaped}</pre>"
-        )
-        document.print_(printer)
+            printer.setPageMargins(
+                QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter
+            )
+            printer.setFullPage(True)
+
+            dpi = max(203, int(printer.resolution()))
+            render_size = QSize(
+                max(1, int(round(float(page_points.width()) * dpi / 72.0))),
+                max(1, int(round(float(page_points.height()) * dpi / 72.0))),
+            )
+            image = document.render(0, render_size)
+            if image.isNull():
+                document.close()
+                buffer.close()
+                raise RuntimeError("receipt PDF could not be rasterized for printing")
+
+            painter = QPainter(printer)
+            if not painter.isActive():
+                document.close()
+                buffer.close()
+                raise RuntimeError("printer could not start an 80mm receipt print job")
+            try:
+                page_rect = printer.pageLayout().fullRectPixels(dpi)
+                painter.fillRect(QRectF(page_rect), Qt.GlobalColor.white)
+                scale = min(
+                    float(page_rect.width()) / float(image.width()),
+                    float(page_rect.height()) / float(image.height()),
+                )
+                draw_width = float(image.width()) * scale
+                draw_height = float(image.height()) * scale
+                target_rect = QRectF(
+                    float(page_rect.x()) + (float(page_rect.width()) - draw_width) / 2.0,
+                    float(page_rect.y()),
+                    draw_width,
+                    draw_height,
+                )
+                painter.drawImage(target_rect, image)
+            finally:
+                painter.end()
+                document.close()
+                buffer.close()
+
+            if printer.printerState() == QPrinter.PrinterState.Error:
+                raise RuntimeError("printer reported an error while sending the receipt")
+            if target_pdf is not None and (
+                not target_pdf.is_file() or target_pdf.stat().st_size == 0
+            ):
+                raise RuntimeError("PDF receipt output was not created")
