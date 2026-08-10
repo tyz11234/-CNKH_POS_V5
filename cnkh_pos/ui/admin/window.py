@@ -16,11 +16,10 @@ from cnkh_pos.ui.admin.data_pages import (
     AuditPage,
     EntityPage,
     MaintenancePage,
-    ProductsPage,
     PurchasesPage,
-    SalesPage,
     StocktakePage,
 )
+from cnkh_pos.ui.admin.enhanced_data_pages import ProductsPageEnhanced, SalesPageEnhanced
 from cnkh_pos.ui.admin.settings_pages import DailyClosingPage, ReportsPage, SettingsPage
 from cnkh_pos.ui.admin.users_page import UsersPage
 from cnkh_pos.ui.widgets import Sidebar
@@ -63,11 +62,11 @@ class AdminWindow(QMainWindow):
         # Keep the historical Products=0 / Stocktake=1 tab indexes stable because
         # existing Windows GUI acceptance and user muscle-memory depend on them.
         # Barcode labels are additive and therefore live in a new third tab.
-        catalog_tabs.addTab(ProductsPage(database, user), "Products / 商品")
+        catalog_tabs.addTab(ProductsPageEnhanced(database, user), "Products / 商品")
         catalog_tabs.addTab(StocktakePage(database, user), "Stocktake / 盘点")
         catalog_tabs.addTab(BarcodeLabelsPage(database), "Barcode Labels / 条码标签")
         self._add_page("products", catalog_tabs)
-        self._add_page("sales", SalesPage(database, user))
+        self._add_page("sales", SalesPageEnhanced(database, user))
         self._add_page("purchases", PurchasesPage(database, user))
         self._add_page("customers", EntityPage(database, user, "customers"))
         self._add_page("suppliers", EntityPage(database, user, "suppliers"))
