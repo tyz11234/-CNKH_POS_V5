@@ -49,6 +49,12 @@ QPushButton {
   background: #EEF3FA; border: 1px solid #D2DCE8; border-radius: 8px;
   min-height: 38px; padding: 0 15px; font-weight: 650;
 }
+QPushButton#CartQuantityMinus, QPushButton#CartQuantityPlus {
+  min-height: 32px; padding: 0; font-size: 16px; font-weight: 800;
+}
+QDoubleSpinBox#CartQuantityValue {
+  min-height: 32px; padding-left: 2px; padding-right: 2px;
+}
 QPushButton:hover { background: #E4EBF5; border-color: #A9B8CB; }
 QPushButton:pressed { background: #D8E3F0; }
 QPushButton:disabled { color: #9AA6B5; background: #EFF2F6; }
