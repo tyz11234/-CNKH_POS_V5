@@ -60,9 +60,12 @@ class AdminWindow(QMainWindow):
         self.page_keys: dict[str, int] = {}
         self._add_page("dashboard", DashboardPage(database))
         catalog_tabs = QTabWidget()
+        # Keep the historical Products=0 / Stocktake=1 tab indexes stable because
+        # existing Windows GUI acceptance and user muscle-memory depend on them.
+        # Barcode labels are additive and therefore live in a new third tab.
         catalog_tabs.addTab(ProductsPage(database, user), "Products / 商品")
-        catalog_tabs.addTab(BarcodeLabelsPage(database), "Barcode Labels / 条码标签")
         catalog_tabs.addTab(StocktakePage(database, user), "Stocktake / 盘点")
+        catalog_tabs.addTab(BarcodeLabelsPage(database), "Barcode Labels / 条码标签")
         self._add_page("products", catalog_tabs)
         self._add_page("sales", SalesPage(database, user))
         self._add_page("purchases", PurchasesPage(database, user))
