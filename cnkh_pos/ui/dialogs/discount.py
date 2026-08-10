@@ -15,7 +15,7 @@ from cnkh_pos.services.discounts import (
     discount_from_amount_cents,
     discount_from_percent_cents,
 )
-from cnkh_pos.services.money import format_myr
+from cnkh_pos.services.money import format_myr, rm_to_cents
 
 
 class DiscountDialog(QDialog):
@@ -71,12 +71,14 @@ class DiscountDialog(QDialog):
 
     def _configure_mode(self, _index: int = -1) -> None:
         if self.mode.currentData() == "PERCENT":
+            self.value.setPrefix("")
             self.value.setSuffix(" %")
             self.value.setMaximum(100.0)
             if self.value.value() > 100:
                 self.value.setValue(100)
         else:
-            self.value.setSuffix(" RM")
+            self.value.setPrefix("RM ")
+            self.value.setSuffix("")
             self.value.setMaximum(self.line_cents / 100)
             if self.value.value() > self.line_cents / 100:
                 self.value.setValue(self.line_cents / 100)
@@ -85,8 +87,9 @@ class DiscountDialog(QDialog):
     def calculated_discount_cents(self) -> int:
         if self.mode.currentData() == "PERCENT":
             return discount_from_percent_cents(self.line_cents, self.value.value())
-        amount_cents = int(round(self.value.value() * 100))
-        return discount_from_amount_cents(self.line_cents, amount_cents)
+        return discount_from_amount_cents(
+            self.line_cents, rm_to_cents(str(self.value.value()))
+        )
 
     def _update_preview(self, _value: float = 0.0) -> None:
         discount = self.calculated_discount_cents()
