@@ -219,7 +219,6 @@ def render_product_label_pdf(
         scale_y = target_height / float(drawing.height)
         scale = min(scale_x, scale_y)
         draw_width = float(drawing.width) * scale
-        draw_height = float(drawing.height) * scale
         draw_x = (page_width - draw_width) / 2
         draw_y = 7.2 * mm
         canvas.saveState()
