@@ -27,9 +27,15 @@ from cnkh_pos.services.catalog import (
     ProductInput,
     is_valid_ean13,
 )
-from cnkh_pos.services.checkout_rounding import RoundedReturnService, RoundedSalesService
+from cnkh_pos.services.checkout_rounding import (
+    RoundedReturnService,
+    RoundedSalesService,
+)
 from cnkh_pos.services.daily_closing import DailyClosingService
-from cnkh_pos.services.discounts import allocate_order_discount, discount_cents_from_value
+from cnkh_pos.services.discounts import (
+    allocate_order_discount,
+    discount_cents_from_value,
+)
 from cnkh_pos.services.entities import EntityInput, EntityService
 from cnkh_pos.services.excel_import import ExcelImportService
 from cnkh_pos.services.held_orders import HeldOrderService
@@ -42,7 +48,6 @@ from cnkh_pos.services.sales import SaleLine, SalesService
 from cnkh_pos.services.stocktake import StocktakeService
 from cnkh_pos.ui.admin import AdminWindow
 from cnkh_pos.ui.staff import StaffWindow
-
 
 ADMIN_PASSWORD = "LifecycleAdmin123!"
 STAFF_PASSWORD = "LifecycleStaff123!"
