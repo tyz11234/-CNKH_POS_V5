@@ -1,0 +1,61 @@
+name: Run8 Candidate Probe
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+
+jobs:
+  compare-candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare repository files with GitHubReady candidate manifest
+        shell: python
+        run: |
+          import hashlib
+          from pathlib import Path
+
+          manifest = Path('.ci/candidate_manifest.sha256')
+          expected = {}
+          for raw in manifest.read_text(encoding='utf-8').splitlines():
+              if not raw.strip():
+                  continue
+              digest, path = raw.split('  ', 1)
+              expected[path] = digest
+
+          missing = []
+          different = []
+          matched = []
+          for path, digest in sorted(expected.items()):
+              p = Path(path)
+              if not p.is_file():
+                  missing.append(path)
+                  continue
+              actual = hashlib.sha256(p.read_bytes()).hexdigest()
+              if actual == digest:
+                  matched.append(path)
+              else:
+                  different.append((path, digest, actual))
+
+          tracked = set()
+          import subprocess
+          output = subprocess.check_output(['git', 'ls-files'], text=True)
+          for path in output.splitlines():
+              if path.startswith('.ci/') or path == '.github/workflows/run8-candidate-probe.yml':
+                  continue
+              tracked.add(path)
+          extra = sorted(tracked - set(expected))
+
+          print(f'MATCHED={len(matched)} MISSING={len(missing)} DIFFERENT={len(different)} EXTRA={len(extra)}')
+          for path in missing:
+              print('MISSING', path)
+          for path, expected_hash, actual_hash in different:
+              print('DIFF', path, 'expected='+expected_hash, 'actual='+actual_hash)
+          for path in extra:
+              print('EXTRA', path)
+
+          if missing or different or extra:
+              raise SystemExit(2)
