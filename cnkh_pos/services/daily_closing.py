@@ -25,7 +25,7 @@ class DailyClosingService:
         day = business_date.isoformat()
         cash_sales = int(
             conn.execute(
-                """SELECT COALESCE(SUM(total_cents),0) FROM sales
+                """SELECT COALESCE(SUM(paid_cents - change_cents),0) FROM sales
                    WHERE payment_method='CASH' AND is_deleted=0
                    AND substr(sold_at,1,10)=?""",
                 (day,),
