@@ -41,6 +41,34 @@ jobs:
           set -euo pipefail
           git apply --check .ci/run8_candidate.patch
           git apply .ci/run8_candidate.patch
+      - name: Restore two exact final candidate files
+        shell: python
+        run: |
+          import base64
+          import gzip
+          import hashlib
+          from pathlib import Path
+
+          exact_files = [
+              (
+                  Path('.ci/exact/test_run8_completion.py.gz.b64'),
+                  Path('tests/test_run8_completion.py'),
+                  'f3b871b2cb5e92c8d99acfbe29152c986bb4a665e9b915f5694e991d12647518',
+              ),
+              (
+                  Path('.ci/exact/windows_gui_acceptance.py.gz.b64'),
+                  Path('tools/windows_gui_acceptance.py'),
+                  '19a16eb16d7d88a68f9081ccd3f1b09c39dd1f57808890a0de2c1b3e694662ad',
+              ),
+          ]
+          for source, target, expected in exact_files:
+              encoded = source.read_text(encoding='ascii')
+              raw = gzip.decompress(base64.b64decode(encoded, validate=True))
+              actual = hashlib.sha256(raw).hexdigest()
+              print(f'{target}: {actual}')
+              if actual != expected:
+                  raise SystemExit(f'exact source SHA-256 mismatch for {target}')
+              target.write_bytes(raw)
       - name: Verify 96 candidate Git blobs
         shell: python
         run: |
