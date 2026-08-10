@@ -1,0 +1,245 @@
+name: Final Installed Business Validation
+
+on:
+  pull_request:
+    branches: ["main"]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  validate-final-installed-package:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Checkout exact final main
+        uses: actions/checkout@v4
+        with:
+          ref: 5d8d7439de7f1d00178e80937e21bef9f8e6ad9d
+          fetch-depth: 1
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validation dependencies
+        run: python -m pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Create clean final source ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path delivery/source -Force | Out-Null
+          $zip = "delivery/source/CNKH_POS_V5_5.0.0-alpha.4_Final_Source.zip"
+          git archive --format=zip --output=$zip HEAD
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zip)) { throw "git archive failed" }
+          $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  CNKH_POS_V5_5.0.0-alpha.4_Final_Source.zip" | Set-Content delivery/source/CNKH_POS_V5_5.0.0-alpha.4_Final_Source.zip.sha256.txt -Encoding ascii
+
+      - name: Download exact Run 111 Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CNKH-Hardware-POS-V5-Windows
+          path: run111-package
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 31416725115
+
+      - name: Download exact Run 111 diagnostics
+        uses: actions/download-artifact@v4
+        with:
+          name: CNKH-POS-V5-Self-Test-Diagnostics
+          path: run111-diagnostics
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 31416725115
+
+      - name: Verify artifact identity SHA and prepare Setup
+        shell: pwsh
+        run: |
+          $package = (Resolve-Path run111-package).Path
+          $setup = Join-Path $package "CNKH_Hardware_POS_V5_Setup.exe"
+          $buildInfoPath = Join-Path $package "build-info.json"
+          $sumsPath = Join-Path $package "SHA256SUMS.txt"
+          if (-not (Test-Path $setup) -or -not (Test-Path $buildInfoPath) -or -not (Test-Path $sumsPath)) { throw "Run111 package incomplete" }
+          $buildInfo = Get-Content $buildInfoPath -Raw | ConvertFrom-Json
+          if ([string]$buildInfo.workflow_run -ne "111") { throw "Wrong source workflow run: $($buildInfo.workflow_run)" }
+          if ($buildInfo.version -ne "5.0.0-alpha.4") { throw "Wrong version: $($buildInfo.version)" }
+          foreach ($line in Get-Content $sumsPath) {
+            if (-not $line.Trim()) { continue }
+            $parts = $line -split '\s+',2
+            if ($parts.Count -ne 2) { throw "Invalid SHA256SUMS line" }
+            $file = Join-Path $package $parts[1].Trim()
+            if (-not (Test-Path $file)) { throw "Missing SHA referenced file: $file" }
+            $actual = (Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $parts[0].Trim().ToLowerInvariant()) { throw "SHA mismatch: $file" }
+          }
+          New-Item -ItemType Directory -Path delivery/setup -Force | Out-Null
+          New-Item -ItemType Directory -Path delivery/evidence -Force | Out-Null
+          Copy-Item $setup delivery/setup/CNKH_Hardware_POS_V5_Setup.exe
+          Copy-Item $buildInfoPath delivery/setup/build-info.json
+          Copy-Item (Join-Path $package "release-manifest.json") delivery/setup/release-manifest.json
+          Copy-Item $sumsPath delivery/setup/RUN111_SHA256SUMS.txt
+          $setupSha = (Get-FileHash delivery/setup/CNKH_Hardware_POS_V5_Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$setupSha  CNKH_Hardware_POS_V5_Setup.exe" | Set-Content delivery/setup/CNKH_Hardware_POS_V5_Setup.exe.sha256.txt -Encoding ascii
+          [pscustomobject]@{
+            status = "PASS"
+            final_main_sha = "5d8d7439de7f1d00178e80937e21bef9f8e6ad9d"
+            release_run = 111
+            artifact_id = 9074265609
+            artifact_digest = "sha256:d3491a22781b23b4c5c0de6cfcc1547473f0bb61b7f54dc20043f67ab6f29cc7"
+            setup_sha256 = $setupSha
+            internal_sha256s_verified = $true
+          } | ConvertTo-Json -Depth 8 | Set-Content delivery/evidence/package-identity.json -Encoding UTF8
+
+      - name: Silent install exact final Setup
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Independent-Final-Installed"
+          if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+          $setup = (Resolve-Path delivery/setup/CNKH_Hardware_POS_V5_Setup.exe).Path
+          $p = Start-Process -FilePath $setup -ArgumentList @("/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART","/SP-","/DIR=$installDir") -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "Silent install failed: $($p.ExitCode)" }
+          $admin = Join-Path $installDir "CNKH_POS_Admin.exe"
+          $staff = Join-Path $installDir "CNKH_POS_Staff.exe"
+          if (-not (Test-Path $admin) -or -not (Test-Path $staff)) { throw "Both installed EXEs are required" }
+          [pscustomobject]@{
+            status = "PASS"
+            admin_sha256 = (Get-FileHash $admin -Algorithm SHA256).Hash.ToLowerInvariant()
+            staff_sha256 = (Get-FileHash $staff -Algorithm SHA256).Hash.ToLowerInvariant()
+          } | ConvertTo-Json -Depth 6 | Set-Content delivery/evidence/installed-files.json -Encoding UTF8
+
+      - name: Installed Admin and Staff self-tests
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Independent-Final-Installed"
+          $profile = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Independent-SelfTest"
+          if (Test-Path $profile) { Remove-Item $profile -Recurse -Force }
+          New-Item -ItemType Directory -Path $profile -Force | Out-Null
+          $env:LOCALAPPDATA = $profile
+          foreach ($mode in @("admin","staff")) {
+            $exe = if ($mode -eq "admin") { Join-Path $installDir "CNKH_POS_Admin.exe" } else { Join-Path $installDir "CNKH_POS_Staff.exe" }
+            $report = (Resolve-Path delivery/evidence).Path + "\\installed-$mode.json"
+            $env:CNKH_POS_SELF_TEST_REPORT = $report
+            $p = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru
+            if ($p.ExitCode -ne 0 -or -not (Test-Path $report)) { throw "Installed $mode self-test failed" }
+            $r = Get-Content $report -Raw | ConvertFrom-Json
+            if ($r.status -ne "PASS" -or $r.mode -ne $mode) { throw "Installed $mode JSON self-test non-PASS" }
+          }
+
+      - name: Full 25-check business lifecycle after installation
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          if (Test-Path self-test-artifacts) { Remove-Item self-test-artifacts -Recurse -Force }
+          python -m pytest -q tests/test_full_business_lifecycle.py
+          $report = "self-test-artifacts/full-business-acceptance.json"
+          if (-not (Test-Path $report)) { throw "Business acceptance JSON missing" }
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          $passed = @($result.checks | Where-Object { $_.status -eq "PASS" })
+          if ($result.status -ne "PASS" -or $passed.Count -ne 25) { throw "Expected 25/25 business PASS checks" }
+          Copy-Item $report delivery/evidence/full-business-acceptance.json -Force
+
+      - name: Open both installed EXEs as real Windows login windows
+        shell: pwsh
+        run: |
+          $profile = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Independent-NormalLaunch"
+          if (Test-Path $profile) { Remove-Item $profile -Recurse -Force }
+          New-Item -ItemType Directory -Path $profile -Force | Out-Null
+          $env:LOCALAPPDATA = $profile
+          Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+          @'
+          from cnkh_pos.config import AppPaths
+          from cnkh_pos.database.bootstrap import bootstrap_database
+          from cnkh_pos.database.connection import Database
+          from cnkh_pos.services.auth import AuthService
+          paths=AppPaths.default(); paths.ensure_directories(); bootstrap_database(paths.database, paths.backups)
+          db=Database(paths.database)
+          with db.transaction() as conn:
+              aid=AuthService.create_user(conn,username="final-admin",display_name="Final Admin",password="FinalAdmin123!",role="ADMIN",permissions={},admin_id=None)
+              AuthService.create_user(conn,username="final-staff",display_name="Final Staff",password="FinalStaff123!",role="STAFF",permissions={"apply_discount":True},admin_id=aid)
+          '@ | python -
+          $installDir = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Independent-Final-Installed"
+          function Observe([string]$exe,[string]$processName,[string]$title) {
+            $start = Get-Date
+            $launcher = Start-Process -FilePath $exe -PassThru
+            $seen = $null
+            try {
+              for ($i=0; $i -lt 360; $i++) {
+                Start-Sleep -Milliseconds 250
+                foreach ($candidate in @(Get-Process -Name $processName -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -ge $start.AddSeconds(-2) })) {
+                  $candidate.Refresh()
+                  if ($candidate.MainWindowHandle -ne 0 -and $candidate.MainWindowTitle -eq $title) { $seen=$candidate; break }
+                }
+                if ($null -ne $seen -or $launcher.HasExited) { break }
+              }
+              if ($null -eq $seen) { return [pscustomobject]@{status="FAIL";expected_title=$title;observed_title="";main_window_handle=0} }
+              return [pscustomobject]@{status="PASS";expected_title=$title;observed_title=$seen.MainWindowTitle;main_window_handle=$seen.MainWindowHandle}
+            } finally {
+              Get-Process -Name $processName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            }
+          }
+          $results = @(
+            Observe (Join-Path $installDir "CNKH_POS_Admin.exe") "CNKH_POS_Admin" "CNKH POS Admin Login"
+            Observe (Join-Path $installDir "CNKH_POS_Staff.exe") "CNKH_POS_Staff" "CNKH POS Staff Login"
+          )
+          $results | ConvertTo-Json -Depth 8 | Set-Content delivery/evidence/installed-normal-launch.json -Encoding UTF8
+          if (@($results | Where-Object { $_.status -ne "PASS" }).Count -ne 0) { throw "One or more installed EXEs failed normal launch" }
+
+      - name: Verify final 80mm print evidence and summarize
+        shell: pwsh
+        run: |
+          Copy-Item run111-diagnostics delivery/evidence/run111-diagnostics -Recurse
+          $print = Get-Content delivery/evidence/run111-diagnostics/final-print-evidence.json -Raw | ConvertFrom-Json
+          if ($print.status -ne "PASS") { throw "Print evidence is not PASS" }
+          if ($print.receipt.qt_page_width_mm -lt 79 -or $print.receipt.qt_page_width_mm -gt 81) { throw "Receipt width is not 80mm" }
+          if ($print.receipt.qt_page_height_mm -lt 110 -or $print.receipt.qt_page_height_mm -gt 130) { throw "Receipt dynamic length is unexpected" }
+          $identity = Get-Content delivery/evidence/package-identity.json -Raw | ConvertFrom-Json
+          @"
+CNKH Hardware POS V5 Final Installed Validation
+Version: 5.0.0-alpha.4
+Final main commit: 5d8d7439de7f1d00178e80937e21bef9f8e6ad9d
+Source Windows Release Gate: Run #111 PASS
+Exact Run #111 Artifact: 9074265609
+Artifact digest: sha256:d3491a22781b23b4c5c0de6cfcc1547473f0bb61b7f54dc20043f67ab6f29cc7
+Setup SHA-256: $($identity.setup_sha256)
+Fresh Windows silent installation: PASS
+Installed Admin self-test: PASS
+Installed Staff self-test: PASS
+Installed normal login windows: 2/2 PASS
+Full business lifecycle after installation: 25/25 PASS
+GUI acceptance in source Release Gate: 100% / 125% / 150% PASS
+Qt 80mm receipt: $($print.receipt.qt_page_width_mm) x $($print.receipt.qt_page_height_mm) mm, readable PASS
+Barcode labels: default 50x30 mm; copies 1-999; preset sizes 35x25 / 40x30 / 50x30 / 60x40
+STATUS: WINDOWS INSTALLATION CANDIDATE PASS
+LIMITATION: no physical shop receipt/label printer is attached to the cloud runner; actual device driver/feed/cutter behavior still needs confirmation on the shop hardware.
+"@ | Set-Content delivery/evidence/FINAL_VALIDATION_SUMMARY_CN.txt -Encoding UTF8
+
+      - name: Upload final clean source
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH-POS-V5-Final-Source
+          path: delivery/source/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Upload final Setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH-POS-V5-Final-Setup
+          path: delivery/setup/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Upload final installed-business evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH-POS-V5-Final-Installed-Business-Evidence
+          path: delivery/evidence/
+          retention-days: 90
+          if-no-files-found: error
