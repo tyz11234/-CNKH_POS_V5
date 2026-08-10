@@ -47,3 +47,5 @@ jobs:
           assert QSvgRenderer is not None
           print('BARCODE LABEL QT MEDIA CHECK PASSED')
           '@ | python -
+
+# This file exists only on the temporary targeted-test branch.
