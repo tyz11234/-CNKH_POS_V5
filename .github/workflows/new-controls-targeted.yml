@@ -1,0 +1,111 @@
+name: New Controls Targeted Check
+
+on:
+  pull_request:
+    branches:
+      - ci/run8-githubready-20260810
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: new-controls-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  focused-new-controls:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+      QT_LOGGING_RULES: qt.qpa.fonts.warning=false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Compile Qt resources
+        run: pyside6-rcc resources/resources.qrc -o cnkh_pos/resources_rc.py
+      - name: Ruff only new feature paths
+        run: >-
+          python -m ruff check
+          cnkh_pos/database/connection.py
+          cnkh_pos/services/money.py
+          cnkh_pos/services/checkout_sales.py
+          cnkh_pos/services/daily_closing.py
+          cnkh_pos/services/barcode_labels.py
+          cnkh_pos/ui/dialogs/cash_checkout.py
+          cnkh_pos/ui/staff/enhanced_window.py
+          cnkh_pos/ui/staff/__init__.py
+          cnkh_pos/ui/admin/barcode_labels.py
+          cnkh_pos/ui/admin/enhanced_data_pages.py
+          cnkh_pos/ui/admin/window.py
+          tests/test_cash_change_rounding.py
+          tests/test_admin_new_controls.py
+          tests/test_barcode_labels.py
+          tests/test_barcode_labels_integration.py
+          tests/test_barcode_labels_ui.py
+      - name: Run only new feature tests
+        run: >-
+          python -m pytest -q
+          tests/test_cash_change_rounding.py
+          tests/test_admin_new_controls.py
+          tests/test_barcode_labels.py
+          tests/test_barcode_labels_integration.py
+          tests/test_barcode_labels_ui.py
+      - name: Compile only new feature paths
+        run: >-
+          python -m compileall -q
+          cnkh_pos/database/connection.py
+          cnkh_pos/services/money.py
+          cnkh_pos/services/checkout_sales.py
+          cnkh_pos/services/daily_closing.py
+          cnkh_pos/services/barcode_labels.py
+          cnkh_pos/ui/dialogs/cash_checkout.py
+          cnkh_pos/ui/staff/enhanced_window.py
+          cnkh_pos/ui/admin/barcode_labels.py
+          cnkh_pos/ui/admin/enhanced_data_pages.py
+          tests/test_cash_change_rounding.py
+          tests/test_admin_new_controls.py
+          tests/test_barcode_labels.py
+          tests/test_barcode_labels_integration.py
+          tests/test_barcode_labels_ui.py
+      - name: Build Admin EXE with barcode dependencies
+        run: pyinstaller --noconfirm --clean build/admin.spec
+      - name: Packaged Admin self-test
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "dist/CNKH_POS_Admin.exe"
+          New-Item -ItemType Directory -Path focused-artifacts -Force | Out-Null
+          $report = Join-Path (Resolve-Path focused-artifacts) "admin-self-test.json"
+          $env:CNKH_POS_SELF_TEST_REPORT = $report
+          $process = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Admin self-test failed with exit code $($process.ExitCode)" }
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          if ($result.status -ne "PASS" -or $result.mode -ne "admin") { throw "Admin self-test did not report PASS/admin" }
+      - name: Build Staff EXE with enhanced checkout
+        run: pyinstaller --noconfirm --clean build/staff.spec
+      - name: Packaged Staff self-test
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path "dist/CNKH_POS_Staff.exe"
+          New-Item -ItemType Directory -Path focused-artifacts -Force | Out-Null
+          $report = Join-Path (Resolve-Path focused-artifacts) "staff-self-test.json"
+          $env:CNKH_POS_SELF_TEST_REPORT = $report
+          $process = Start-Process -FilePath $exe -ArgumentList "--self-test" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Staff self-test failed with exit code $($process.ExitCode)" }
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          if ($result.status -ne "PASS" -or $result.mode -ne "staff") { throw "Staff self-test did not report PASS/staff" }
+      - name: Upload focused diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: New-Controls-Targeted-Diagnostics
+          path: focused-artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
