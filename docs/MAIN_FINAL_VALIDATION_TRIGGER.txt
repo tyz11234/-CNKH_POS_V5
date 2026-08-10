@@ -1,0 +1,4 @@
+CNKH Hardware POS V5 final validation trigger.
+
+Base main commit: b47c95833a20335ab13139482662748d1fa07898
+Product source/configuration is unchanged from main; this text file exists only to trigger a readable pull-request Windows Release Gate because the current connector cannot list push-event runs.
