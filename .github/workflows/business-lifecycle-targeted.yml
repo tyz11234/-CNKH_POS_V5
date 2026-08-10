@@ -1,0 +1,50 @@
+name: Business Lifecycle Targeted Check
+
+on:
+  pull_request:
+    branches:
+      - ci/run8-githubready-20260810
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: business-lifecycle-targeted-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  business-lifecycle:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+      QT_LOGGING_RULES: qt.qpa.fonts.warning=false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Compile Qt resources
+        run: pyside6-rcc resources/resources.qrc -o cnkh_pos/resources_rc.py
+      - name: Ruff business lifecycle harness
+        run: python -m ruff check tools/windows_business_acceptance.py
+      - name: Compile business lifecycle harness
+        run: python -m compileall -q tools/windows_business_acceptance.py
+      - name: Run full business lifecycle harness
+        shell: pwsh
+        run: |
+          $env:CNKH_POS_BUSINESS_ACCEPTANCE_DIR = (Join-Path $PWD "business-acceptance-artifacts")
+          python tools/windows_business_acceptance.py
+      - name: Upload business lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Business-Lifecycle-Targeted-Evidence
+          path: business-acceptance-artifacts/
+          if-no-files-found: error
+          retention-days: 14
