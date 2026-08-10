@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import html
 import json
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
 from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen.canvas import Canvas
 
 from cnkh_pos.database.connection import Database
@@ -13,6 +16,74 @@ from cnkh_pos.services.money import format_myr
 
 WINDOWS_DEFAULT_PRINTER = "__WINDOWS_DEFAULT__"
 RECEIPT_TEXT_WIDTH = 40
+RECEIPT_PDF_CJK_FONT = "STSong-Light"
+
+
+def _character_width(character: str) -> int:
+    return 2 if unicodedata.east_asian_width(character) in {"W", "F"} else 1
+
+
+def _display_width(value: object) -> int:
+    return sum(_character_width(character) for character in str(value))
+
+
+def _truncate_display(value: object, width: int) -> str:
+    result: list[str] = []
+    used = 0
+    for character in str(value):
+        character_width = _character_width(character)
+        if used + character_width > width:
+            break
+        result.append(character)
+        used += character_width
+    return "".join(result)
+
+
+def _truncate_display_tail(value: object, width: int) -> str:
+    result: list[str] = []
+    used = 0
+    for character in reversed(str(value)):
+        character_width = _character_width(character)
+        if used + character_width > width:
+            break
+        result.append(character)
+        used += character_width
+    return "".join(reversed(result))
+
+
+def _center_display(value: object, width: int = RECEIPT_TEXT_WIDTH) -> str:
+    text = _truncate_display(str(value).strip(), width)
+    remaining = max(0, width - _display_width(text))
+    left = remaining // 2
+    return (" " * left) + text + (" " * (remaining - left))
+
+
+def _wrap_display(value: object, width: int = RECEIPT_TEXT_WIDTH) -> list[str]:
+    normalized = str(value).replace("\r\n", "\n").replace("\r", "\n")
+    wrapped: list[str] = []
+    for logical_line in normalized.split("\n"):
+        text = logical_line.strip()
+        if not text:
+            continue
+        chunk: list[str] = []
+        used = 0
+        for character in text:
+            character_width = _character_width(character)
+            if chunk and used + character_width > width:
+                wrapped.append("".join(chunk).rstrip())
+                chunk = []
+                used = 0
+            chunk.append(character)
+            used += character_width
+        if chunk:
+            wrapped.append("".join(chunk).rstrip())
+    return wrapped
+
+
+def _centered_setting_lines(
+    value: object, width: int = RECEIPT_TEXT_WIDTH
+) -> list[str]:
+    return [_center_display(line, width) for line in _wrap_display(value, width)]
 
 
 def resolve_printer_target(
@@ -43,12 +114,14 @@ def resolve_printer_target(
 
 def _receipt_pair(left: object, right: object, *, width: int = RECEIPT_TEXT_WIDTH) -> str:
     """Fit a left label/detail and right value into one plain-text receipt line."""
-    left_text = str(left)
     right_text = str(right)
-    if len(right_text) >= width:
-        return right_text[-width:]
-    left_width = width - len(right_text)
-    return f"{left_text[:left_width]:<{left_width}}{right_text}"
+    right_width = _display_width(right_text)
+    if right_width >= width:
+        return _truncate_display_tail(right_text, width)
+    left_width = width - right_width
+    left_text = _truncate_display(left, left_width)
+    padding = max(0, left_width - _display_width(left_text))
+    return f"{left_text}{' ' * padding}{right_text}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -137,18 +210,25 @@ class PrintingService:
     @staticmethod
     def render_text(receipt: Receipt) -> str:
         width = RECEIPT_TEXT_WIDTH
-        lines = [
-            str(receipt.settings.get("store_name", "CNKH Hardware")).center(width),
-            str(receipt.settings.get("address", "")).center(width),
-            str(receipt.settings.get("phone", "")).center(width),
-            "-" * width,
-            f"Receipt: {receipt.receipt_no}"[:width],
-            f"Date: {receipt.sold_at}"[:width],
-            f"Cashier: {receipt.cashier}"[:width],
-            "-" * width,
-        ]
+        lines: list[str] = []
+        lines.extend(
+            _centered_setting_lines(
+                receipt.settings.get("store_name", "CNKH Hardware"), width
+            )
+        )
+        lines.extend(_centered_setting_lines(receipt.settings.get("address", ""), width))
+        lines.extend(_centered_setting_lines(receipt.settings.get("phone", ""), width))
+        lines.extend(
+            [
+                "-" * width,
+                _truncate_display(f"Receipt: {receipt.receipt_no}", width),
+                _truncate_display(f"Date: {receipt.sold_at}", width),
+                _truncate_display(f"Cashier: {receipt.cashier}", width),
+                "-" * width,
+            ]
+        )
         for item in receipt.items:
-            lines.append(str(item["product_name_snapshot"])[:width])
+            lines.append(_truncate_display(item["product_name_snapshot"], width))
             qty = item["quantity_decimal"]
             detail = f"  {qty} {item['unit_snapshot']} x {format_myr(int(item['unit_price_cents']))}"
             lines.append(
@@ -170,12 +250,12 @@ class PrintingService:
                 _receipt_pair("TOTAL", format_myr(receipt.total_cents), width=width),
                 _receipt_pair("PAID", format_myr(receipt.paid_cents), width=width),
                 _receipt_pair("CHANGE", format_myr(receipt.change_cents), width=width),
-                f"Payment: {receipt.payment_method}"[:width],
+                _truncate_display(f"Payment: {receipt.payment_method}", width),
                 "-" * width,
-                str(receipt.settings.get("footer", "")).center(width),
-                str(receipt.settings.get("notes", "")).center(width),
             ]
         )
+        lines.extend(_centered_setting_lines(receipt.settings.get("footer", ""), width))
+        lines.extend(_centered_setting_lines(receipt.settings.get("notes", ""), width))
         return "\n".join(line for line in lines if line.strip())
 
     @staticmethod
@@ -260,8 +340,8 @@ class PrintingService:
         return f"""
 <html><head><style>
 html, body {{ margin: 0; padding: 0; }}
-body {{ font-family: Consolas, 'Courier New', monospace; font-size: 7.5pt; color: #000; }}
-.center {{ text-align: center; }}
+body {{ font-family: Consolas, 'Microsoft YaHei UI', 'Microsoft YaHei', SimSun, 'Courier New', monospace; font-size: 7.5pt; color: #000; }}
+.center {{ text-align: center; overflow-wrap: anywhere; }}
 .store {{ font-weight: 700; margin-bottom: 1mm; }}
 .rule {{ border-top: 1px dashed #000; margin: 1.5mm 0; height: 0; }}
 .product {{ margin-top: 0.8mm; overflow-wrap: anywhere; }}
@@ -280,10 +360,19 @@ table.total td {{ font-weight: 800; }}
         text = self.render_text(receipt)
         line_height = 4.2 * mm
         height = max(120 * mm, (text.count("\n") + 5) * line_height)
+        try:
+            pdfmetrics.getFont(RECEIPT_PDF_CJK_FONT)
+        except KeyError:
+            pdfmetrics.registerFont(UnicodeCIDFont(RECEIPT_PDF_CJK_FONT))
         canvas = Canvas(str(path), pagesize=(80 * mm, height))
-        canvas.setFont("Courier", 7.5)
         y = height - 8 * mm
         for line in text.splitlines():
+            font_name = (
+                RECEIPT_PDF_CJK_FONT
+                if any(ord(character) > 127 for character in line)
+                else "Courier"
+            )
+            canvas.setFont(font_name, 7.5)
             canvas.drawString(4 * mm, y, line)
             y -= line_height
         canvas.save()
