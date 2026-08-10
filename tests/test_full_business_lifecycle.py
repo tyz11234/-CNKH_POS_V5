@@ -482,13 +482,13 @@ def test_full_windows_business_lifecycle() -> None:
             product_label = load_product_label(database, auto_product)
             labels_pdf = render_product_label_pdf(
                 product_label,
-                get_label_profile("40x30"),
+                get_label_profile("50x30"),
                 4,
                 root / "product-labels.pdf",
             )
             page_count = len(re.findall(rb"/Type\s*/Page\b", labels_pdf.read_bytes()))
             assert page_count == 4
-            passed("barcode_labels.40x30_four_copies")
+            passed("barcode_labels.50x30_four_copies")
 
             template = ExcelImportService.create_template(root / "products.xlsx")
             workbook = load_workbook(template)

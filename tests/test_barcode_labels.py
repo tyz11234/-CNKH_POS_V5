@@ -26,10 +26,10 @@ def _label(barcode: str = "9551234567891") -> ProductLabel:
     )
 
 
-def test_standard_40x30_profile_is_default_market_profile() -> None:
-    assert LABEL_PROFILES[0].key == "40x30"
-    assert LABEL_PROFILES[0].width_mm == 40.0
-    assert LABEL_PROFILES[0].height_mm == 30.0
+def test_50x30_profile_is_required_product_label_size() -> None:
+    profile = get_label_profile("50x30")
+    assert profile.width_mm == 50.0
+    assert profile.height_mm == 30.0
     assert {profile.key for profile in LABEL_PROFILES} == {
         "35x25",
         "40x30",
@@ -64,7 +64,7 @@ def test_empty_or_unprintable_barcode_is_rejected() -> None:
 def test_pdf_preview_uses_one_page_per_requested_label(tmp_path: Path) -> None:
     output = render_product_label_pdf(
         _label("4006381333931"),
-        get_label_profile("40x30"),
+        get_label_profile("50x30"),
         4,
         tmp_path / "labels.pdf",
     )

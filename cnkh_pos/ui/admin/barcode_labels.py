@@ -46,7 +46,7 @@ class BarcodeLabelsPage(QWidget):
         root.addWidget(title)
 
         hint = QLabel(
-            "选择商品、标签尺寸和打印张数。默认 40×30 mm；打印时可在 Windows 对话框选择实际标签打印机。"
+            "选择商品、标签尺寸和打印张数。默认 50×30 mm；打印时可在 Windows 对话框选择实际标签打印机。"
         )
         hint.setWordWrap(True)
         root.addWidget(hint)
@@ -81,6 +81,9 @@ class BarcodeLabelsPage(QWidget):
         self.profile = QComboBox()
         for label_profile in LABEL_PROFILES:
             self.profile.addItem(label_profile.label, label_profile.key)
+        default_profile_index = self.profile.findData("50x30")
+        if default_profile_index >= 0:
+            self.profile.setCurrentIndex(default_profile_index)
         self.copies = QSpinBox()
         self.copies.setRange(1, 999)
         self.copies.setValue(1)

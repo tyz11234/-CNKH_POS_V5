@@ -73,9 +73,9 @@ def test_final_barcode_label_and_80mm_receipt_evidence() -> None:
 
         label_pdf = render_product_label_pdf(
             label,
-            get_label_profile("40x30"),
+            get_label_profile("50x30"),
             4,
-            EVIDENCE_DIR / "final-product-label-40x30-4copies.pdf",
+            EVIDENCE_DIR / "final-product-label-50x30-4copies.pdf",
         )
         label_pages = len(re.findall(rb"/Type\s*/Page\b", label_pdf.read_bytes()))
         assert label_pages == 4
@@ -142,7 +142,7 @@ def test_final_barcode_label_and_80mm_receipt_evidence() -> None:
         payload = {
             "status": "PASS",
             "label": {
-                "profile": "40x30",
+                "profile": "50x30",
                 "copies": 4,
                 "pages": label_pages,
                 "product": label.name,

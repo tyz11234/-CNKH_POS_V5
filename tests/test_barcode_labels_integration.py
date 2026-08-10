@@ -69,7 +69,7 @@ def test_generated_catalog_barcode_flows_into_label_page() -> None:
         assert page.table.rowCount() == 1
         assert page.table.item(0, 1).text() == "PVC Cable Label Test"
         assert page.table.item(0, 3).text() == label.barcode
-        assert page.profile.currentData() == "40x30"
+        assert page.profile.currentData() == "50x30"
         copies = page.findChild(QSpinBox)
         assert copies is not None
         assert copies.minimum() == 1
@@ -97,7 +97,7 @@ def test_admin_product_area_contains_barcode_labels_tab_without_replacing_existi
 
 def test_barcode_svg_is_valid_for_qt_renderer_used_by_windows_print_path() -> None:
     _app()
-    drawing = _barcode_drawing("4006381333931", get_label_profile("40x30"))
+    drawing = _barcode_drawing("4006381333931", get_label_profile("50x30"))
     renderer = QSvgRenderer(QByteArray(drawing.asString("svg")))
     assert renderer.isValid()
     image = QImage(400, 300, QImage.Format.Format_ARGB32)

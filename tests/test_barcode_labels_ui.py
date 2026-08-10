@@ -70,7 +70,7 @@ def test_barcode_label_page_defaults_and_user_copy_count() -> None:
         catalog_tabs = window.pages.widget(window.page_keys["products"])
         page = catalog_tabs.widget(2)
         assert isinstance(page, BarcodeLabelsPage)
-        assert page.profile.currentData() == "40x30"
+        assert page.profile.currentData() == "50x30"
         assert page.copies.minimum() == 1
         assert page.copies.maximum() == 999
         page.copies.setValue(37)
