@@ -19,7 +19,10 @@ from cnkh_pos.ui.admin.data_pages import (
     PurchasesPage,
     StocktakePage,
 )
-from cnkh_pos.ui.admin.enhanced_data_pages import ProductsPageEnhanced, SalesPageEnhanced
+from cnkh_pos.ui.admin.enhanced_data_pages import (
+    ProductsPageEnhanced,
+    SalesPageEnhanced,
+)
 from cnkh_pos.ui.admin.settings_pages import DailyClosingPage, ReportsPage, SettingsPage
 from cnkh_pos.ui.admin.users_page import UsersPage
 from cnkh_pos.ui.widgets import Sidebar
