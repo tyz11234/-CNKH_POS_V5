@@ -2,17 +2,29 @@
 
 版本：5.0.0-alpha.4
 
-本文件只记录在已通过本地 Source Candidate 基础上，为下一次真实 GitHub Actions / Windows runner 增加的门禁。
+本文件记录 Run #8 从 Source Candidate 进入真实 GitHub Actions / Windows runner 后追加的发布门禁与最终介质规格。
 
-## 新增门禁
+## Windows 发布门禁
 
-1. `python -m unittest discover -s tests -v` 作为 Windows workflow 独立步骤。
-2. `python -m compileall -q cnkh_pos tools tests admin_launcher.py staff_launcher.py` 作为独立步骤。
-3. Setup 静默安装并通过 installed Admin/Staff JSON self-test 后，增加 `Installed EXE normal launch smoke test`。
-4. normal-launch smoke 在隔离 `LOCALAPPDATA` 建立测试数据库和 Admin/Staff 用户，然后直接运行安装目录里的 `CNKH_POS_Admin.exe` 与 `CNKH_POS_Staff.exe`，不传 `--self-test`。
-5. Admin 必须出现 `CNKH POS Admin Login`，Staff 必须出现 `CNKH POS Staff Login`，并且 `MainWindowHandle` 非 0。
-6. 结果写入 `self-test-artifacts/installed-normal-launch.json`；任何一项不是 PASS 都会阻断发布 Artifact。
+1. `python -m ruff check`、pytest、unittest、compileall 与 Source Self-Test 必须全部通过。
+2. Windows GUI 必须在 100%、125%、150% 三档缩放下通过验收。
+3. Admin / Staff 两个 PyInstaller EXE 必须成功构建并通过 packaged JSON self-test。
+4. Setup.exe 必须成功构建并完成静默安装。
+5. 安装后的 Admin / Staff EXE 必须再次通过 JSON self-test。
+6. 安装后的 Admin 必须正常出现 `CNKH POS Admin Login`，Staff 必须正常出现 `CNKH POS Staff Login`，并且 `MainWindowHandle` 非 0。
+7. 完整业务生命周期验收覆盖：用户、客户、供应商、商品新增/编辑/删除、自动/手动 Barcode、进货与付款、库存、挂单/取单、结账、%/RM Discount、结账进位、退货、销售删除、盘点、报表、日结、Excel、条码标签、小票、备份恢复与 Admin/Staff 页面启动。
+8. 最终 release manifest、release package 校验和 Windows Artifact 上传必须成功。
 
-## 当前状态
+## 最终打印介质规格
 
-本地 pytest、unittest、Source Self-Test、compileall、workflow YAML 已重新通过。当前会话虽已获得用户 GitHub Full Access 授权，但执行器没有暴露 GitHub repo/Actions 调用函数，也没有可用 `gh` CLI/直连网络，所以**尚未实际触发 Windows Actions**。本候选不得称为 Windows Installation Candidate。
+- 商品条码标签默认规格：**50 × 30 mm**。
+- 条码标签打印张数：用户可自定义 1–999 张；每张标签独立一页/一张。
+- 销售小票规格：**80 mm 热敏纸**。
+- 80mm Qt/QPrinter 路径必须使用可读性回归，防止出现字体黑块、金额裁切或内容异常收缩。
+- 实体打印机仍属于最终现场硬件兼容性验证；CI 负责验证 Windows 打印路径、PDF 输出与版面证据。
+
+## 当前验证状态
+
+GitHub Actions Run #92 曾完整通过代码、GUI、EXE、Setup、安装后 self-test、普通启动 smoke 与 Artifact 上传；人工检查证据时发现 Qt 80mm 小票存在黑块，因此未签为最终完成。随后已修复 Qt 80mm 打印路径，并通过 focused Windows 可读性回归。
+
+之后用户将商品条码标签最终规格明确为 50 × 30 mm。50×30 的默认 UI、PDF、Windows 条码渲染与相关 focused 测试已经通过；最终干净 Windows Release Gate 必须在包含 50×30 标签 + 80mm 小票修复的同一 commit 上重新完整通过后，才可称为最终 Windows Installation Candidate。
