@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QApplication, QSpinBox, QTabWidget
 
 from cnkh_pos.database.bootstrap import bootstrap_database
 from cnkh_pos.database.connection import Database
-from cnkh_pos.services.auth import AuthService, AuthenticatedUser
+from cnkh_pos.services.auth import AuthenticatedUser, AuthService
 from cnkh_pos.services.barcode_labels import (
     _barcode_drawing,
     get_label_profile,
