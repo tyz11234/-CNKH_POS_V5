@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
 
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
+from cnkh_pos.ui.admin.barcode_labels import BarcodeLabelsPage
 from cnkh_pos.ui.admin.dashboard import DashboardPage
 from cnkh_pos.ui.admin.data_pages import (
     AuditPage,
@@ -60,6 +61,7 @@ class AdminWindow(QMainWindow):
         self._add_page("dashboard", DashboardPage(database))
         catalog_tabs = QTabWidget()
         catalog_tabs.addTab(ProductsPage(database, user), "Products / 商品")
+        catalog_tabs.addTab(BarcodeLabelsPage(database), "Barcode Labels / 条码标签")
         catalog_tabs.addTab(StocktakePage(database, user), "Stocktake / 盘点")
         self._add_page("products", catalog_tabs)
         self._add_page("sales", SalesPage(database, user))
