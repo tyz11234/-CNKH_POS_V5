@@ -5,61 +5,100 @@ on:
     branches: ["main"]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  compare-candidate:
+  materialize-candidate:
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compare Git blob bytes with GitHubReady candidate manifest
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - name: Rebuild and verify candidate patch
+        shell: python
+        run: |
+          import base64
+          import gzip
+          import hashlib
+          from pathlib import Path
+
+          parts = sorted(Path('.ci/run8_patch').glob('part*.b64'))
+          if len(parts) != 4:
+              raise SystemExit(f'expected 4 patch chunks, got {len(parts)}')
+          encoded = ''.join(p.read_text(encoding='ascii') for p in parts)
+          compressed = base64.b64decode(encoded, validate=True)
+          patch = gzip.decompress(compressed)
+          digest = hashlib.sha256(patch).hexdigest()
+          print('PATCH_SHA256=' + digest)
+          if digest != '32c8402fd1070335d6eca4a8f38edbe7517f340ce8d73a6e7a02c7088119a5dc':
+              raise SystemExit('candidate patch SHA-256 mismatch')
+          Path('.ci/run8_candidate.patch').write_bytes(patch)
+      - name: Apply candidate patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git apply --check .ci/run8_candidate.patch
+          git apply .ci/run8_candidate.patch
+      - name: Verify 96 candidate Git blobs
         shell: python
         run: |
           import hashlib
           import subprocess
           from pathlib import Path
 
-          manifest = Path('.ci/candidate_manifest.sha256')
+          subprocess.check_call(['git', 'add', '-A'])
           expected = {}
-          for raw in manifest.read_text(encoding='utf-8').splitlines():
+          for raw in Path('.ci/candidate_manifest.sha256').read_text(encoding='utf-8').splitlines():
               if not raw.strip():
                   continue
               digest, path = raw.split('  ', 1)
               expected[path] = digest
 
-          tree_paths = set(
-              subprocess.check_output(
-                  ['git', 'ls-tree', '-r', '--name-only', 'HEAD'], text=True
-              ).splitlines()
+          index_paths = set(
+              subprocess.check_output(['git', 'ls-files'], text=True).splitlines()
           )
           missing = []
           different = []
           matched = []
           for path, digest in sorted(expected.items()):
-              if path not in tree_paths:
+              if path not in index_paths:
                   missing.append(path)
                   continue
-              data = subprocess.check_output(['git', 'show', f'HEAD:{path}'])
+              data = subprocess.check_output(['git', 'show', f':{path}'])
               actual = hashlib.sha256(data).hexdigest()
               if actual == digest:
                   matched.append(path)
               else:
                   different.append((path, digest, actual))
 
-          tracked = {
-              path for path in tree_paths
+          tracked_product = {
+              path for path in index_paths
               if not path.startswith('.ci/')
               and path != '.github/workflows/run8-candidate-probe.yml'
           }
-          extra = sorted(tracked - set(expected))
-
+          extra = sorted(tracked_product - set(expected))
           print(f'MATCHED={len(matched)} MISSING={len(missing)} DIFFERENT={len(different)} EXTRA={len(extra)}')
           for path in missing:
               print('MISSING', path)
-          for path, expected_hash, actual_hash in different:
-              print('DIFF', path, 'expected='+expected_hash, 'actual='+actual_hash)
+          for path, exp, actual in different:
+              print('DIFF', path, 'expected='+exp, 'actual='+actual)
           for path in extra:
               print('EXTRA', path)
-
-          if missing or different or extra:
+          if missing or different or extra or len(matched) != 96:
               raise SystemExit(2)
+      - name: Commit materialized candidate to validation branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git reset .ci/run8_candidate.patch
+          rm -f .ci/run8_candidate.patch
+          if git diff --cached --quiet; then
+            echo "Candidate source already materialized."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "CI: materialize Run8 GitHubReady candidate"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
