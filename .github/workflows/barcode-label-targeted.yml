@@ -1,9 +1,9 @@
 name: Barcode Label Targeted Check
 
 on:
-  push:
+  pull_request:
     branches:
-      - ci/barcode-label-targeted-20260810
+      - ci/run8-githubready-20260810
   workflow_dispatch:
 
 jobs:
