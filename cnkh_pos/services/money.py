@@ -25,6 +25,29 @@ def clamp_discount_cents(discount_cents: int, line_cents: int) -> int:
     return max(0, min(int(discount_cents), max(0, int(line_cents))))
 
 
+def round_checkout_cents(cents: int) -> int:
+    """Apply CNKH checkout rounding to the final non-credit payable amount.
+
+    Last sen digit 1-4 rounds down to 0, 5 stays unchanged, and 6-9 rounds
+    up to the next 10 sen. Examples: 42 -> 40, 45 -> 45, 67 -> 70.
+    """
+    value = int(cents)
+    if value < 0:
+        raise ValueError("checkout amount cannot be negative")
+    remainder = value % 10
+    if remainder == 0 or remainder == 5:
+        return value
+    if 1 <= remainder <= 4:
+        return value - remainder
+    return value + (10 - remainder)
+
+
+def checkout_rounding_cents(cents: int) -> int:
+    """Return the signed adjustment applied by :func:`round_checkout_cents`."""
+    value = int(cents)
+    return round_checkout_cents(value) - value
+
+
 def format_myr(cents: int) -> str:
     sign = "-" if cents < 0 else ""
     absolute = abs(int(cents))
