@@ -1,0 +1,89 @@
+name: Final Run111 Export
+
+on:
+  pull_request:
+    branches:
+      - ci/final-installed-proof-base-20260811
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  export-final-run111:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      FINAL_MAIN_SHA: 5d8d7439de7f1d00178e80937e21bef9f8e6ad9d
+    steps:
+      - name: Checkout exact final main
+        uses: actions/checkout@v4
+        with:
+          ref: 5d8d7439de7f1d00178e80937e21bef9f8e6ad9d
+          fetch-depth: 1
+
+      - name: Create exact clean source ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path delivery/source -Force | Out-Null
+          $zip = "delivery/source/CNKH_POS_V5_5.0.0-alpha.4_Final_Source.zip"
+          git archive --format=zip --output=$zip HEAD
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path $zip)) { throw "git archive failed" }
+          $sha = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$sha  CNKH_POS_V5_5.0.0-alpha.4_Final_Source.zip" | Set-Content delivery/source/CNKH_POS_V5_5.0.0-alpha.4_Final_Source.zip.sha256.txt -Encoding ascii
+          [pscustomobject]@{status="PASS";main_sha=$env:FINAL_MAIN_SHA;source_zip_sha256=$sha} | ConvertTo-Json | Set-Content delivery/source/source-build-info.json -Encoding UTF8
+
+      - name: Download exact fully-green Run 111 Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CNKH-Hardware-POS-V5-Windows
+          path: run111-package
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 31416725115
+
+      - name: Verify Run 111 package and extract Setup
+        shell: pwsh
+        run: |
+          $package = (Resolve-Path run111-package).Path
+          $setup = Join-Path $package "CNKH_Hardware_POS_V5_Setup.exe"
+          $buildInfoPath = Join-Path $package "build-info.json"
+          $sumsPath = Join-Path $package "SHA256SUMS.txt"
+          $manifestPath = Join-Path $package "release-manifest.json"
+          if (-not (Test-Path $setup) -or -not (Test-Path $buildInfoPath) -or -not (Test-Path $sumsPath) -or -not (Test-Path $manifestPath)) { throw "Run 111 artifact incomplete" }
+          $buildInfo = Get-Content $buildInfoPath -Raw | ConvertFrom-Json
+          if ([string]$buildInfo.workflow_run -ne "111" -or $buildInfo.version -ne "5.0.0-alpha.4") { throw "Run 111 identity mismatch" }
+          foreach ($line in Get-Content $sumsPath) {
+            if (-not $line.Trim()) { continue }
+            $parts = $line -split '\s+', 2
+            if ($parts.Count -ne 2) { throw "Invalid SHA256SUMS line" }
+            $candidate = Join-Path $package $parts[1].Trim()
+            if (-not (Test-Path $candidate)) { throw "SHA256SUMS references missing file" }
+            $actual = (Get-FileHash $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $parts[0].Trim().ToLowerInvariant()) { throw "SHA256 mismatch for $($parts[1])" }
+          }
+          New-Item -ItemType Directory -Path delivery/setup -Force | Out-Null
+          Copy-Item $setup delivery/setup/CNKH_Hardware_POS_V5_Setup.exe
+          Copy-Item $buildInfoPath delivery/setup/build-info.json
+          Copy-Item $manifestPath delivery/setup/release-manifest.json
+          Copy-Item $sumsPath delivery/setup/RUN111_SHA256SUMS.txt
+          $sha = (Get-FileHash delivery/setup/CNKH_Hardware_POS_V5_Setup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sha -ne "f193c480c457c64a2622ac7e0af0a3e248b967edb6c968482a2e1fef7cbe8c57") { throw "Setup SHA does not match independently installed proof" }
+          "$sha  CNKH_Hardware_POS_V5_Setup.exe" | Set-Content delivery/setup/CNKH_Hardware_POS_V5_Setup.exe.sha256.txt -Encoding ascii
+          [pscustomobject]@{status="PASS";source_release_gate_run=111;source_artifact_id=9074265609;source_artifact_digest="sha256:d3491a22781b23b4c5c0de6cfcc1547473f0bb61b7f54dc20043f67ab6f29cc7";setup_sha256=$sha;independent_installed_proof_run=31436921577} | ConvertTo-Json -Depth 5 | Set-Content delivery/setup/FINAL_SETUP_IDENTITY.json -Encoding UTF8
+
+      - name: Upload final exact source
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH-POS-V5-Final-Source-Run111
+          path: delivery/source/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Upload final exact Run111 Setup
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH-POS-V5-Final-Setup-Run111
+          path: delivery/setup/
+          retention-days: 90
+          if-no-files-found: error
