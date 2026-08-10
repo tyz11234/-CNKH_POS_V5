@@ -8,6 +8,7 @@ on:
       - "cnkh_pos/services/barcode_labels.py"
       - "cnkh_pos/ui/admin/barcode_labels.py"
       - "cnkh_pos/ui/admin/window.py"
+      - "build/admin.spec"
       - "tests/test_barcode_labels.py"
       - "tests/test_barcode_labels_integration.py"
       - ".github/workflows/barcode-labels-gate.yml"
