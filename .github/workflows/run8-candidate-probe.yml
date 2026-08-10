@@ -12,10 +12,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Compare repository files with GitHubReady candidate manifest
+      - name: Compare Git blob bytes with GitHubReady candidate manifest
         shell: python
         run: |
           import hashlib
+          import subprocess
           from pathlib import Path
 
           manifest = Path('.ci/candidate_manifest.sha256')
@@ -26,27 +27,30 @@ jobs:
               digest, path = raw.split('  ', 1)
               expected[path] = digest
 
+          tree_paths = set(
+              subprocess.check_output(
+                  ['git', 'ls-tree', '-r', '--name-only', 'HEAD'], text=True
+              ).splitlines()
+          )
           missing = []
           different = []
           matched = []
           for path, digest in sorted(expected.items()):
-              p = Path(path)
-              if not p.is_file():
+              if path not in tree_paths:
                   missing.append(path)
                   continue
-              actual = hashlib.sha256(p.read_bytes()).hexdigest()
+              data = subprocess.check_output(['git', 'show', f'HEAD:{path}'])
+              actual = hashlib.sha256(data).hexdigest()
               if actual == digest:
                   matched.append(path)
               else:
                   different.append((path, digest, actual))
 
-          tracked = set()
-          import subprocess
-          output = subprocess.check_output(['git', 'ls-files'], text=True)
-          for path in output.splitlines():
-              if path.startswith('.ci/') or path == '.github/workflows/run8-candidate-probe.yml':
-                  continue
-              tracked.add(path)
+          tracked = {
+              path for path in tree_paths
+              if not path.startswith('.ci/')
+              and path != '.github/workflows/run8-candidate-probe.yml'
+          }
           extra = sorted(tracked - set(expected))
 
           print(f'MATCHED={len(matched)} MISSING={len(missing)} DIFFERENT={len(different)} EXTRA={len(extra)}')
