@@ -74,6 +74,7 @@ def main() -> int:
     )
     from cnkh_pos.ui.admin.users_page import EditUserDialog, NewUserDialog, UsersPage
     from cnkh_pos.ui.dialogs.checkout import CheckoutDialog, SaleCompletedDialog
+    from cnkh_pos.ui.dialogs.discount import DiscountDialog
     from cnkh_pos.ui.staff import StaffWindow
     from cnkh_pos.ui.theme import apply_theme
 
@@ -333,14 +334,23 @@ def main() -> int:
         assert staff_window.cart_quantities[cart_product_id] == before_plus
         assert Decimal(str(restored_spin.value())) == before_plus
         staff_window.cart.selectRow(0)
+        total_before_discount = staff_window._cart_total()
+
+        def apply_item_discount(dialog: QDialog) -> None:
+            assert isinstance(dialog, DiscountDialog)
+            dialog.mode.setCurrentIndex(dialog.mode.findData("FIXED"))
+            dialog.value.setValue(0.50)
+            dialog.accept()
+
         schedule_modal(
             app,
             QTimer,
-            lambda dialog: isinstance(dialog, QInputDialog),
-            lambda dialog: enter_double(dialog, 0.50),
+            lambda dialog: isinstance(dialog, DiscountDialog),
+            apply_item_discount,
         )
         QTest.mouseClick(staff_window.discount_button, Qt.MouseButton.LeftButton)
         assert 50 in staff_window.cart_discounts.values()
+        assert staff_window._cart_total() == total_before_discount - 50
 
         held_quantities = dict(staff_window.cart_quantities)
         held_discounts = dict(staff_window.cart_discounts)
