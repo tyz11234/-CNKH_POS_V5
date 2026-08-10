@@ -1,0 +1,327 @@
+name: Run103 Installed Artifact Full Validation
+
+on:
+  push:
+    branches:
+      - ci/run103-installed-artifact-validation
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  installed-artifact-full-business-validation:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+    steps:
+      - name: Checkout exact validated source
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install validation dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt -r requirements-build.txt
+
+      - name: Download exact Run 103 tested Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: CNKH-Hardware-POS-V5-Windows
+          path: downloaded-package
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          run-id: 31409560604
+
+      - name: Verify artifact identity and SHA256SUMS
+        shell: pwsh
+        run: |
+          $package = (Resolve-Path "downloaded-package").Path
+          $buildInfoPath = Join-Path $package "build-info.json"
+          $sumsPath = Join-Path $package "SHA256SUMS.txt"
+          $setupPath = Join-Path $package "CNKH_Hardware_POS_V5_Setup.exe"
+          if (-not (Test-Path $buildInfoPath)) { throw "build-info.json missing from Run 103 artifact" }
+          if (-not (Test-Path $sumsPath)) { throw "SHA256SUMS.txt missing from Run 103 artifact" }
+          if (-not (Test-Path $setupPath)) { throw "Setup.exe missing from Run 103 artifact" }
+
+          $buildInfo = Get-Content $buildInfoPath -Raw | ConvertFrom-Json
+          if ($buildInfo.commit -ne "6661f336da62028fd9e5b8f16bcbd7a286bbcac3") {
+            throw "Artifact commit mismatch: $($buildInfo.commit)"
+          }
+          if ([string]$buildInfo.workflow_run -ne "103") {
+            throw "Artifact workflow run mismatch: $($buildInfo.workflow_run)"
+          }
+
+          foreach ($line in Get-Content $sumsPath) {
+            if (-not $line.Trim()) { continue }
+            $parts = $line -split '\s+', 2
+            if ($parts.Count -ne 2) { throw "Invalid SHA256SUMS line: $line" }
+            $expected = $parts[0].Trim().ToLowerInvariant()
+            $name = $parts[1].Trim()
+            $candidate = Join-Path $package $name
+            if (-not (Test-Path $candidate)) { throw "SHA256SUMS file is missing: $name" }
+            $actual = (Get-FileHash $candidate -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "SHA256 mismatch for $name" }
+          }
+
+          New-Item -ItemType Directory -Path post-install-evidence -Force | Out-Null
+          [pscustomobject]@{
+            artifact_run = 103
+            artifact_id = 9071631565
+            artifact_archive_digest = "sha256:eb738abbb9d334b41d80340d0bf6a5874f96ff72beb02f9df112c0a95a59e8de"
+            source_commit = $buildInfo.commit
+            setup_sha256 = (Get-FileHash $setupPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            package_sha256_verified = $true
+            status = "PASS"
+          } | ConvertTo-Json -Depth 5 | Set-Content post-install-evidence/artifact-identity.json -Encoding UTF8
+
+      - name: Silent install exact Run 103 Setup.exe
+        shell: pwsh
+        run: |
+          $package = (Resolve-Path "downloaded-package").Path
+          $setup = Join-Path $package "CNKH_Hardware_POS_V5_Setup.exe"
+          $installDir = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Run103-Full-Installed"
+          if (Test-Path $installDir) { Remove-Item $installDir -Recurse -Force }
+          $process = Start-Process -FilePath $setup -ArgumentList @(
+            "/VERYSILENT",
+            "/SUPPRESSMSGBOXES",
+            "/NORESTART",
+            "/SP-",
+            "/DIR=$installDir"
+          ) -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Run 103 installer failed: $($process.ExitCode)" }
+          $admin = Join-Path $installDir "CNKH_POS_Admin.exe"
+          $staff = Join-Path $installDir "CNKH_POS_Staff.exe"
+          if (-not (Test-Path $admin) -or -not (Test-Path $staff)) {
+            throw "Run 103 installation does not contain both EXEs"
+          }
+          [pscustomobject]@{
+            install_dir = $installDir
+            admin_sha256 = (Get-FileHash $admin -Algorithm SHA256).Hash.ToLowerInvariant()
+            staff_sha256 = (Get-FileHash $staff -Algorithm SHA256).Hash.ToLowerInvariant()
+            status = "PASS"
+          } | ConvertTo-Json -Depth 5 | Set-Content post-install-evidence/installed-files.json -Encoding UTF8
+
+      - name: Installed Admin and Staff packaged self-tests
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Run103-Full-Installed"
+          $admin = Join-Path $installDir "CNKH_POS_Admin.exe"
+          $staff = Join-Path $installDir "CNKH_POS_Staff.exe"
+          $profile = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Run103-SelfTest-Profile"
+          if (Test-Path $profile) { Remove-Item $profile -Recurse -Force }
+          New-Item -ItemType Directory -Path $profile -Force | Out-Null
+          $env:LOCALAPPDATA = $profile
+
+          $adminReport = (Resolve-Path "post-install-evidence").Path + "\\installed-admin.json"
+          $env:CNKH_POS_SELF_TEST_REPORT = $adminReport
+          $adminProcess = Start-Process -FilePath $admin -ArgumentList "--self-test" -Wait -PassThru
+          if ($adminProcess.ExitCode -ne 0 -or -not (Test-Path $adminReport)) {
+            throw "Installed Admin self-test failed: exit=$($adminProcess.ExitCode)"
+          }
+          $adminResult = Get-Content $adminReport -Raw | ConvertFrom-Json
+          if ($adminResult.status -ne "PASS" -or $adminResult.mode -ne "admin") {
+            throw "Installed Admin JSON self-test did not report PASS/admin"
+          }
+
+          $staffReport = (Resolve-Path "post-install-evidence").Path + "\\installed-staff.json"
+          $env:CNKH_POS_SELF_TEST_REPORT = $staffReport
+          $staffProcess = Start-Process -FilePath $staff -ArgumentList "--self-test" -Wait -PassThru
+          if ($staffProcess.ExitCode -ne 0 -or -not (Test-Path $staffReport)) {
+            throw "Installed Staff self-test failed: exit=$($staffProcess.ExitCode)"
+          }
+          $staffResult = Get-Content $staffReport -Raw | ConvertFrom-Json
+          if ($staffResult.status -ne "PASS" -or $staffResult.mode -ne "staff") {
+            throw "Installed Staff JSON self-test did not report PASS/staff"
+          }
+
+      - name: Full business lifecycle after artifact installation
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          if (Test-Path self-test-artifacts) { Remove-Item self-test-artifacts -Recurse -Force }
+          python -m pytest -q tests/test_full_business_lifecycle.py
+          $report = "self-test-artifacts/full-business-acceptance.json"
+          if (-not (Test-Path $report)) { throw "Full business lifecycle report is missing" }
+          $result = Get-Content $report -Raw | ConvertFrom-Json
+          if ($result.status -ne "PASS") { throw "Full business lifecycle JSON did not report PASS" }
+          $required = @(
+            "users.create_and_authenticate",
+            "categories.add_and_rename",
+            "customers_and_suppliers.add_update",
+            "products.auto_and_manual_barcode",
+            "products.edit",
+            "supplier_product_mapping",
+            "purchase.create_receive_and_pay",
+            "purchase.delete_and_reverse_stock",
+            "pos.hold_and_retrieve",
+            "pos.checkout_percent_fixed_discount_and_rounding",
+            "receipt.text_and_80mm_pdf",
+            "sales.return_then_delete_with_stock_reversal",
+            "customer.credit_sale_and_payment",
+            "stocktake.complete_with_variance",
+            "reports.sales_profit_receivable",
+            "daily_cash_closing",
+            "barcode_labels.50x30_four_copies",
+            "excel.template_preview_import",
+            "product_dialog.explicit_auto_manual_barcode_mode",
+            "delete.customer_supplier_product_preserves_history",
+            "backup_and_restore",
+            "database.integrity_check",
+            "admin_gui.all_pages_and_new_controls",
+            "staff_gui.opens_with_discount_and_checkout",
+            "audit_trail"
+          )
+          $passed = @($result.checks | Where-Object { $_.status -eq "PASS" } | ForEach-Object { $_.name })
+          $missing = @($required | Where-Object { $_ -notin $passed })
+          if ($missing.Count -ne 0) { throw "Full lifecycle missing required PASS checks: $($missing -join ', ')" }
+          Copy-Item $report post-install-evidence/full-business-acceptance.json -Force
+
+      - name: Create normal-launch profile for installed EXEs
+        shell: pwsh
+        run: |
+          $profile = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Run103-NormalLaunch-Profile"
+          if (Test-Path $profile) { Remove-Item $profile -Recurse -Force }
+          New-Item -ItemType Directory -Path $profile -Force | Out-Null
+          $env:LOCALAPPDATA = $profile
+          @'
+          from cnkh_pos.config import AppPaths
+          from cnkh_pos.database.bootstrap import bootstrap_database
+          from cnkh_pos.database.connection import Database
+          from cnkh_pos.services.auth import AuthService
+
+          paths = AppPaths.default()
+          paths.ensure_directories()
+          bootstrap_database(paths.database, paths.backups)
+          database = Database(paths.database)
+          with database.transaction() as conn:
+              admin_id = AuthService.create_user(
+                  conn,
+                  username="artifact-admin",
+                  display_name="Artifact Admin",
+                  password="ArtifactAdmin123!",
+                  role="ADMIN",
+                  permissions={},
+                  admin_id=None,
+              )
+              AuthService.create_user(
+                  conn,
+                  username="artifact-staff",
+                  display_name="Artifact Staff",
+                  password="ArtifactStaff123!",
+                  role="STAFF",
+                  permissions={"apply_discount": True},
+                  admin_id=admin_id,
+              )
+          '@ | python -
+          "CNKH_RUN103_NORMAL_PROFILE=$profile" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Installed EXEs open real Windows login windows after full lifecycle
+        shell: pwsh
+        run: |
+          $env:LOCALAPPDATA = $env:CNKH_RUN103_NORMAL_PROFILE
+          Remove-Item Env:QT_QPA_PLATFORM -ErrorAction SilentlyContinue
+          $installDir = Join-Path $env:RUNNER_TEMP "CNKH-POS-V5-Run103-Full-Installed"
+          $admin = Join-Path $installDir "CNKH_POS_Admin.exe"
+          $staff = Join-Path $installDir "CNKH_POS_Staff.exe"
+
+          function Test-CnkhWindow {
+            param(
+              [Parameter(Mandatory=$true)][string]$ExePath,
+              [Parameter(Mandatory=$true)][string]$ProcessName,
+              [Parameter(Mandatory=$true)][string]$ExpectedTitle
+            )
+            $startedAt = Get-Date
+            $launcher = $null
+            $observed = $null
+            try {
+              $launcher = Start-Process -FilePath $ExePath -PassThru
+              for ($attempt = 0; $attempt -lt 360; $attempt++) {
+                Start-Sleep -Milliseconds 250
+                $candidates = @(Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Where-Object { $_.StartTime -ge $startedAt.AddSeconds(-2) })
+                foreach ($candidate in $candidates) {
+                  $candidate.Refresh()
+                  if ($candidate.MainWindowHandle -ne 0 -and $candidate.MainWindowTitle -eq $ExpectedTitle) {
+                    $observed = $candidate
+                    break
+                  }
+                }
+                if ($null -ne $observed) { break }
+                if ($launcher.HasExited) { break }
+              }
+              if ($null -eq $observed) {
+                $exitCode = if ($null -ne $launcher -and $launcher.HasExited) { $launcher.ExitCode } else { $null }
+                return [pscustomobject]@{
+                  exe = $ExePath
+                  expected_title = $ExpectedTitle
+                  observed_title = ""
+                  main_window_handle = 0
+                  exit_code = $exitCode
+                  status = "FAIL"
+                }
+              }
+              return [pscustomobject]@{
+                exe = $ExePath
+                expected_title = $ExpectedTitle
+                observed_title = $observed.MainWindowTitle
+                main_window_handle = $observed.MainWindowHandle
+                exit_code = $null
+                status = "PASS"
+              }
+            } finally {
+              Get-Process -Name $ProcessName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            }
+          }
+
+          $launchResults = @(
+            Test-CnkhWindow -ExePath $admin -ProcessName "CNKH_POS_Admin" -ExpectedTitle "CNKH POS Admin Login"
+            Test-CnkhWindow -ExePath $staff -ProcessName "CNKH_POS_Staff" -ExpectedTitle "CNKH POS Staff Login"
+          )
+          $launchResults | ConvertTo-Json -Depth 8 | Set-Content post-install-evidence/installed-normal-launch-after-full-business.json -Encoding UTF8
+          $launchResults | ConvertTo-Json -Depth 8 | Write-Host
+          if (@($launchResults | Where-Object { $_.status -ne "PASS" }).Count -ne 0) {
+            throw "One or more exact Run 103 installed EXEs failed normal launch after full business validation"
+          }
+
+      - name: Validate final evidence and write summary
+        shell: pwsh
+        run: |
+          $business = Get-Content post-install-evidence/full-business-acceptance.json -Raw | ConvertFrom-Json
+          $admin = Get-Content post-install-evidence/installed-admin.json -Raw | ConvertFrom-Json
+          $staff = Get-Content post-install-evidence/installed-staff.json -Raw | ConvertFrom-Json
+          $launch = @(Get-Content post-install-evidence/installed-normal-launch-after-full-business.json -Raw | ConvertFrom-Json)
+          if ($business.status -ne "PASS" -or $admin.status -ne "PASS" -or $staff.status -ne "PASS") {
+            throw "Final evidence contains non-PASS result"
+          }
+          if (@($launch | Where-Object { $_.status -ne "PASS" }).Count -ne 0) {
+            throw "Final launch evidence contains non-PASS result"
+          }
+          [pscustomobject]@{
+            status = "PASS"
+            source_commit = "6661f336da62028fd9e5b8f16bcbd7a286bbcac3"
+            source_release_gate_run = 103
+            source_release_artifact_id = 9071631565
+            source_release_artifact_digest = "sha256:eb738abbb9d334b41d80340d0bf6a5874f96ff72beb02f9df112c0a95a59e8de"
+            full_business_checks = @($business.checks | Where-Object { $_.status -eq "PASS" }).Count
+            installed_admin_self_test = $admin.status
+            installed_staff_self_test = $staff.status
+            installed_normal_launch_passes = @($launch | Where-Object { $_.status -eq "PASS" }).Count
+          } | ConvertTo-Json -Depth 8 | Set-Content post-install-evidence/final-post-install-validation.json -Encoding UTF8
+          Get-Content post-install-evidence/final-post-install-validation.json -Raw | Write-Host
+
+      - name: Upload Run 103 post-install full validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CNKH-POS-V5-Run103-PostInstall-Full-Validation
+          path: post-install-evidence/
+          if-no-files-found: error
+          retention-days: 90
