@@ -221,7 +221,6 @@ CREATE TABLE audit_logs (
   old_value TEXT NOT NULL DEFAULT '',
   new_value TEXT NOT NULL DEFAULT '',
   reason TEXT NOT NULL DEFAULT ''
-)
 )''');
     await _seed(db);
   }
@@ -355,7 +354,7 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
       batch.insert('demo_users', {...u, 'is_active': 1},
           conflictAlgorithm: ConflictAlgorithm.ignore);
     }
-    batch.insert('settings', {'key': 'store_name', 'value': 'CNKH Hardware'},
+    batch.insert('settings', {'key': 'store_name', 'value': '黄金发宝号'},
         conflictAlgorithm: ConflictAlgorithm.ignore);
     batch.insert('settings', {'key': 'product_images_enabled', 'value': '0'},
         conflictAlgorithm: ConflictAlgorithm.ignore);
@@ -375,6 +374,34 @@ CREATE TABLE IF NOT EXISTS barcode_print_queue (
       await txn.delete('stock_moves');
       await txn.delete('daily_closings');
     });
+  }
+
+  /// Full local wipe: all business tables, then re-seed catalog/customers/suppliers
+  /// and demo_users / default settings. Keeps app usable after reset.
+  Future<void> factoryResetLocalData() async {
+    final d = await db;
+    await d.transaction((txn) async {
+      for (final table in [
+        'sales',
+        'held_orders',
+        'purchases',
+        'stock_moves',
+        'daily_closings',
+        'audit_logs',
+        'barcode_print_queue',
+        'products',
+        'customers',
+        'suppliers',
+        'categories',
+        'settings',
+        'demo_users',
+      ]) {
+        try {
+          await txn.delete(table);
+        } catch (_) {}
+      }
+    });
+    await _seed(d);
   }
 
   Future<String> nextReceiptNo() async {
