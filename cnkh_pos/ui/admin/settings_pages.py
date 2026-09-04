@@ -3,13 +3,17 @@ from __future__ import annotations
 import json
 import os
 from datetime import date, datetime
+from pathlib import Path
 
 from PySide6.QtCore import QDate, Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDateEdit,
     QDialog,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -27,7 +31,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from cnkh_pos.config import AppPaths
+from cnkh_pos.config import RECEIPT_QR_IMAGE_NAME, AppPaths
 from cnkh_pos.database.connection import Database
 from cnkh_pos.database.migrations import utc_now_text
 from cnkh_pos.services.auth import AuthenticatedUser
@@ -295,6 +299,40 @@ class ReceiptSettingsWidget(QWidget):
             form.addRow(label, widget)
             if hasattr(widget, "textChanged"):
                 widget.textChanged.connect(self.update_preview)
+
+        qr_section = QLabel("DuitNow 收款码（仅管理员可改） / DuitNow QR (Admin only)")
+        qr_section.setObjectName("SectionTitle")
+        qr_section.setWordWrap(True)
+        form.addRow(qr_section)
+        self.qr_enabled = QCheckBox(
+            "在收据打印 DuitNow 收款码 / Print DuitNow QR on receipt"
+        )
+        self.qr_enabled.setObjectName("ReceiptQrEnabled")
+        self.qr_enabled.stateChanged.connect(self.update_preview)
+        form.addRow("收据打印 / Print", self.qr_enabled)
+        qr_row = QHBoxLayout()
+        upload_qr = QPushButton("上传 / 替换 QR")
+        upload_qr.setObjectName("ReceiptQrUploadButton")
+        upload_qr.setProperty("acceptanceName", "ReceiptQrUploadButton")
+        upload_qr.clicked.connect(self.upload_qr)
+        clear_qr = QPushButton("清除 QR")
+        clear_qr.setObjectName("ReceiptQrClearButton")
+        clear_qr.setProperty("acceptanceName", "ReceiptQrClearButton")
+        clear_qr.clicked.connect(self.clear_qr)
+        qr_row.addWidget(upload_qr)
+        qr_row.addWidget(clear_qr)
+        form.addRow("管理（仅管理员）", qr_row)
+        self.qr_preview = QLabel("No QR image")
+        self.qr_preview.setObjectName("ReceiptQrPreview")
+        self.qr_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.qr_preview.setFixedSize(120, 120)
+        self.qr_preview.setStyleSheet(
+            "background:#F7FAFC; border:1px solid #DCE3EC; color:#5B6B7C;"
+        )
+        self.qr_preview.setScaledContents(False)
+        form.addRow("预览 / Preview", self.qr_preview)
+        self._qr_source_path: str | None = None
+
         save = QPushButton("保存 Receipt Settings")
         save.setObjectName("SuccessButton")
         save.clicked.connect(self.save)
@@ -358,6 +396,15 @@ class ReceiptSettingsWidget(QWidget):
         self.phone.setText(str(value.get("phone", "")))
         self.footer.setPlainText(str(value.get("footer", "Thank you / 谢谢光临")))
         self.notes.setPlainText(str(value.get("notes", "")))
+        qr_flag = value.get("qr_enabled", False)
+        if isinstance(qr_flag, str):
+            self.qr_enabled.setChecked(
+                qr_flag.strip().lower() in {"1", "true", "yes", "on"}
+            )
+        else:
+            self.qr_enabled.setChecked(bool(qr_flag))
+        self._qr_source_path = str(value.get("qr_image", "") or "") or None
+        self._refresh_qr_preview()
         mode = str(value.get("printer_mode", "")).upper()
         name = str(value.get("printer_name", "")).strip()
         if mode == "DEFAULT":
@@ -373,11 +420,15 @@ class ReceiptSettingsWidget(QWidget):
         self.printer.setCurrentIndex(max(0, index))
 
     def update_preview(self) -> None:
+        qr_note = ""
+        if self.qr_enabled.isChecked() and self._current_qr_path() is not None:
+            qr_note = f"\n{'[QR image attached]':^32}"
         self.preview.setPlainText(
             f"{self.store.text():^32}\n{self.address.toPlainText():^32}\n{self.phone.text():^32}\n"
             f"{'-' * 32}\nReceipt: CNKH20260809-001\nCashier: Admin\n{'-' * 32}\n"
             f"PVC Pipe 20mm      RM 9.00\nHammer 2lb         RM 15.90\n{'-' * 32}\n"
             f"TOTAL              RM 24.90\n{'-' * 32}\n{self.footer.toPlainText():^32}\n{self.notes.toPlainText():^32}"
+            f"{qr_note}"
         )
 
     def save(self) -> None:
@@ -390,6 +441,32 @@ class ReceiptSettingsWidget(QWidget):
             )
             return
         mode = "DEFAULT" if selected == WINDOWS_DEFAULT_PRINTER else "NAMED"
+        paths = AppPaths.default()
+        paths.ensure_directories()
+        qr_image_key = ""
+        source = self._qr_source_path
+        if source:
+            source_path = Path(source)
+            if source_path.is_file():
+                target = paths.receipt_qr_image
+                # Keep a stable Assets/receipt_qr.png (or .jpg) name for printing.
+                suffix = source_path.suffix.lower()
+                if suffix in {".jpg", ".jpeg"}:
+                    target = paths.assets / "receipt_qr.jpg"
+                elif suffix == ".png":
+                    target = paths.assets / RECEIPT_QR_IMAGE_NAME
+                else:
+                    target = paths.receipt_qr_image
+                if source_path.resolve() != target.resolve():
+                    import shutil
+
+                    shutil.copy2(source_path, target)
+                qr_image_key = target.name
+                self._qr_source_path = str(target)
+            elif (paths.assets / Path(source).name).is_file():
+                qr_image_key = Path(source).name
+            elif source in {RECEIPT_QR_IMAGE_NAME, "receipt_qr.jpg"}:
+                qr_image_key = source
         value = {
             "store_name": self.store.text(),
             "address": self.address.toPlainText(),
@@ -398,13 +475,84 @@ class ReceiptSettingsWidget(QWidget):
             "notes": self.notes.toPlainText(),
             "printer_mode": mode,
             "printer_name": "" if mode == "DEFAULT" else str(selected),
+            "qr_enabled": bool(self.qr_enabled.isChecked()),
+            "qr_image": qr_image_key,
         }
         with self.database.transaction() as conn:
             conn.execute(
                 "INSERT OR REPLACE INTO settings(key,value_json,updated_at,updated_by) VALUES ('receipt',?,?,?)",
                 (json.dumps(value, ensure_ascii=False), utc_now_text(), self.user.id),
             )
+        self._refresh_qr_preview()
+        self.update_preview()
         QMessageBox.information(self, "Receipt Settings", "收据与打印机设置已保存。")
+
+    def _current_qr_path(self) -> Path | None:
+        paths = AppPaths.default()
+        candidates: list[Path] = []
+        if self._qr_source_path:
+            source = Path(self._qr_source_path)
+            candidates.append(source)
+            candidates.append(paths.assets / source.name)
+        candidates.extend(
+            (
+                paths.receipt_qr_image,
+                paths.assets / "receipt_qr.jpg",
+                paths.assets / RECEIPT_QR_IMAGE_NAME,
+            )
+        )
+        for candidate in candidates:
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                return candidate
+        return None
+
+    def _refresh_qr_preview(self) -> None:
+        path = self._current_qr_path()
+        if path is None:
+            self.qr_preview.setPixmap(QPixmap())
+            self.qr_preview.setText("No QR image")
+            return
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            self.qr_preview.setPixmap(QPixmap())
+            self.qr_preview.setText("Invalid image")
+            return
+        self.qr_preview.setText("")
+        self.qr_preview.setPixmap(
+            pixmap.scaled(
+                self.qr_preview.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+    def upload_qr(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select DuitNow Payment QR Image / 选择 DuitNow 收款码",
+            "",
+            "Images (*.png *.jpg *.jpeg);;PNG (*.png);;JPEG (*.jpg *.jpeg)",
+            options=QFileDialog.Option.DontUseNativeDialog,
+        )
+        if not selected:
+            return
+        self._qr_source_path = selected
+        self.qr_enabled.setChecked(True)
+        self._refresh_qr_preview()
+        self.update_preview()
+
+    def clear_qr(self) -> None:
+        paths = AppPaths.default()
+        for candidate in (
+            paths.receipt_qr_image,
+            paths.assets / "receipt_qr.jpg",
+            paths.assets / RECEIPT_QR_IMAGE_NAME,
+        ):
+            candidate.unlink(missing_ok=True)
+        self._qr_source_path = None
+        self.qr_enabled.setChecked(False)
+        self._refresh_qr_preview()
+        self.update_preview()
 
     def test_print(self) -> None:
         from PySide6.QtCore import QSizeF

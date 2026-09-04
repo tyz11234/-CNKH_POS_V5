@@ -366,6 +366,8 @@ class StaffWindow(QMainWindow):
             self,
             customers=self._customers(),
             quick_settings_callback=self._open_quick_amount_settings,
+            paths=AppPaths.default(),
+            is_admin=self.user.role == "ADMIN",
         )
         if dialog.exec() != CheckoutDialog.DialogCode.Accepted:
             return
@@ -385,6 +387,7 @@ class StaffWindow(QMainWindow):
                 paid_cents=dialog.paid_cents,
                 cashier_id=self.user.id,
                 customer_id=dialog.customer_id,
+                deposit_method=dialog.deposit_method,
             )
         except Exception as exc:
             QMessageBox.critical(self, "Checkout", str(exc))

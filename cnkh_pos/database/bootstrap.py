@@ -43,7 +43,7 @@ REQUIRED_SCHEMA_COLUMNS: dict[str, set[str]] = {
         "payment_method",
         "voided_at",
     },
-    "sales": {"id", "receipt_no", "total_cents", "payment_method", "sold_at"},
+    "sales": {"id", "receipt_no", "total_cents", "payment_method", "deposit_method", "sold_at"},
     "sale_items": {
         "sale_id",
         "quantity_decimal",

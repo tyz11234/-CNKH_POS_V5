@@ -240,6 +240,35 @@ def migration_007_cash_closing_and_release_metadata(conn: sqlite3.Connection) ->
     )
 
 
+def migration_008_credit_deposit_method(conn: sqlite3.Connection) -> None:
+    if "deposit_method" not in _columns(conn, "sales"):
+        conn.execute("ALTER TABLE sales ADD COLUMN deposit_method TEXT")
+    # Legacy CREDIT down-payments were treated as cash-in-drawer.
+    conn.execute(
+        """
+        UPDATE sales
+        SET deposit_method='CASH'
+        WHERE payment_method='CREDIT'
+          AND paid_cents > 0
+          AND (deposit_method IS NULL OR TRIM(deposit_method)='')
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO app_version_history(
+            version, release_date, new_features, bug_fixes, db_migration_version
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            "5.0.0-alpha.4",
+            "2026-09-04",
+            "Receipt QR image; Credit deposit tender method; restore UX polish",
+            "Only CASH Credit deposits count toward daily cash drawer",
+            8,
+        ),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Migration:
     version: int
@@ -259,6 +288,7 @@ MIGRATIONS: tuple[Migration, ...] = (
         "cash_closing_and_release_metadata",
         migration_007_cash_closing_and_release_metadata,
     ),
+    Migration(8, "credit_deposit_method", migration_008_credit_deposit_method),
 )
 
 

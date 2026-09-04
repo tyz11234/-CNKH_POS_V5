@@ -2,6 +2,14 @@
 
 ## 5.0.0-alpha.4 — 2026-08-10
 
+### Continued (2026-09-04)
+
+- Admin Receipt Settings：付款 QR 图片上传 / 替换 / 清除，并在 80mm PDF 收据页脚居中打印。
+- 结账选择 DUITNOW_QR（及 Credit 定金 DUITNOW_QR）时，桌面结账对话框大图展示店内 DuitNow 收款码（有图则显示，无图则提示；上传仍仅限 Admin 收据设置）。
+- Credit 结账定金可选择 CASH / CARD / DUITNOW_QR；日结仅把 CASH（及旧 NULL）定金计入系统现金。
+- 备份 / 还原失败提示改为中英双语，明确文件保留与数据库未被替换。
+- Schema 8：`sales.deposit_method`。
+
 ### New
 
 - Admin 可视化账号管理与 Staff 三项权限门禁。
@@ -32,8 +40,8 @@
 
 ### Migration
 
-- Database schema version: 7
-- 新增 `supplier_products`、`daily_cash_closings.opening_cash_cents`、`sale_returns.refund_method`。
+- Database schema version: 8
+- 新增 `supplier_products`、`daily_cash_closings.opening_cash_cents`、`sale_returns.refund_method`、`sales.deposit_method`。
 
 ## 5.0.0-alpha.3 — 2026-08-09
 
