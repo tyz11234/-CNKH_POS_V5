@@ -1,7 +1,7 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
@@ -10,9 +10,20 @@ import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'pos_repository.dart';
+import 'receipt_template.dart';
 
-const String kStoreName = 'CNKH Hardware';
-const int kReceiptWidth = 40;
+export 'receipt_template.dart'
+    show
+        ReceiptTemplate,
+        ReceiptSettingKeys,
+        kStoreName,
+        kReceiptWidth,
+        kDefaultReceiptCharWidth,
+        kDefaultReceiptFooter,
+        formatRmPlain;
+
+const String kEReceiptCacheDirKey = 'ereceipt_cache_dir';
+const String kWhatsAppShareChannel = 'com.cnkh.cnkh_pos_mobile/whatsapp_share';
 
 /// Strip spaces/dashes; MY local `0…` → `60…`. Returns digits only or ''.
 String normalizeMyPhone(String raw) {
@@ -28,33 +39,7 @@ String normalizeMyPhone(String raw) {
   return digits;
 }
 
-String formatRmPlain(int cents) {
-  final sign = cents < 0 ? '-' : '';
-  final a = cents.abs();
-  return '$sign${'RM'} ${a ~/ 100}.${(a % 100).toString().padLeft(2, '0')}';
-}
-
-String _truncate(String s, int width) {
-  if (s.length <= width) return s;
-  return s.substring(0, width);
-}
-
-String _center(String s, int width) {
-  if (s.length >= width) return _truncate(s, width);
-  final pad = width - s.length;
-  final left = pad ~/ 2;
-  return (' ' * left) + s + (' ' * (pad - left));
-}
-
-String _pair(String left, String right, int width) {
-  final l = _truncate(left, width - 1);
-  final r = right;
-  final space = width - l.length - r.length;
-  if (space < 1) return _truncate('$l $r', width);
-  return l + (' ' * space) + r;
-}
-
-/// 40-col thermal text matching PC ``PrintingService.render_text``.
+/// Thermal / preview text via [ReceiptTemplate] (single source of truth).
 String buildPrintReceiptText({
   required String receiptNo,
   required String soldAt,
@@ -69,84 +54,54 @@ String buildPrintReceiptText({
   String cashier = '',
   String address = '',
   String phone = '',
-  String footer = 'Thank you / 谢谢光临',
+  String footer = kDefaultReceiptFooter,
   String notes = '',
+  ReceiptTemplate? template,
 }) {
-  final w = kReceiptWidth;
-  final out = <String>[];
-  out.add(_center(storeName, w));
-  if (address.trim().isNotEmpty) out.add(_center(address.trim(), w));
-  if (phone.trim().isNotEmpty) out.add(_center(phone.trim(), w));
-  out.add('-' * w);
-  out.add(_truncate('Receipt: $receiptNo', w));
-  final dt = soldAt.length >= 19
-      ? soldAt.substring(0, 19).replaceFirst('T', ' ')
-      : soldAt;
-  out.add(_truncate('Date: $dt', w));
-  if (cashier.isNotEmpty) out.add(_truncate('Cashier: $cashier', w));
-  out.add('-' * w);
-  for (final line in lines) {
-    final nameZh = (line['nameZh'] as String?)?.trim() ?? '';
-    final nameEn = (line['nameEn'] as String?)?.trim() ?? '';
-    final name = nameZh.isNotEmpty
-        ? nameZh
-        : (nameEn.isNotEmpty ? nameEn : 'Item');
-    out.add(_truncate(name, w));
-    final qty = line['qty'] ?? 1;
-    final unit = line['unitPriceCents'] as int? ?? 0;
-    final qtyStr = '$qty';
-    final lineTotal = line['lineTotalCents'] as int? ??
-        (unit * (qty is int ? qty : int.tryParse('$qty') ?? 1));
-    final disc = line['lineDiscountCents'] as int? ?? 0;
-    final detail = '  $qtyStr pcs x ${formatRmPlain(unit)}';
-    out.add(_pair(detail, formatRmPlain(lineTotal + disc), w));
-    if (disc > 0) {
-      out.add(_pair('  Discount / 折扣', formatRmPlain(-disc), w));
-    }
-  }
-  out.add('-' * w);
-  out.add(_pair('SUBTOTAL', formatRmPlain(subtotalCents), w));
-  out.add(_pair('DISCOUNT', formatRmPlain(-discountCents), w));
-  out.add(_pair('TOTAL', formatRmPlain(totalCents), w));
-  out.add(_pair('PAID', formatRmPlain(paidCents), w));
-  out.add(_pair('CHANGE', formatRmPlain(changeCents), w));
-  out.add(_truncate('Payment: $paymentMethod', w));
-  out.add('-' * w);
-  if (footer.trim().isNotEmpty) out.add(_center(footer.trim(), w));
-  if (notes.trim().isNotEmpty) out.add(_center(notes.trim(), w));
-  return out.join('\n');
+  final effective = template ??
+      ReceiptTemplate(
+        storeName: storeName,
+        address: address,
+        phone: phone,
+        footerLines: footer,
+        notes: notes,
+      );
+  return effective.render(
+    receiptNo: receiptNo,
+    soldAt: soldAt,
+    paymentMethod: paymentMethod,
+    subtotalCents: subtotalCents,
+    discountCents: discountCents,
+    totalCents: totalCents,
+    paidCents: paidCents,
+    changeCents: changeCents,
+    lines: lines,
+    cashier: cashier,
+  );
 }
 
-String buildPrintReceiptTextFromSale(SaleRecord sale, {String storeName = kStoreName}) {
-  List<Map<String, Object?>> lines = const [];
-  try {
-    final raw = jsonDecode(sale.linesJson);
-    if (raw is List) {
-      lines = [
-        for (final e in raw)
-          if (e is Map)
-            {
-              for (final entry in e.entries)
-                entry.key.toString(): entry.value as Object?,
-            },
-      ];
-    }
-  } catch (_) {}
-  final discount =
-      sale.itemDiscountCents + sale.orderDiscountCents;
-  return buildPrintReceiptText(
-    receiptNo: sale.receiptNo,
-    soldAt: sale.soldAt,
-    paymentMethod: sale.paymentMethod,
-    subtotalCents: sale.subtotalCents,
-    discountCents: discount,
-    totalCents: sale.totalCents,
-    paidCents: sale.paidCents,
-    changeCents: sale.changeCents,
-    lines: lines,
-    storeName: storeName,
-    cashier: sale.cashier,
-  );
+String buildPrintReceiptTextFromSale(
+  SaleRecord sale, {
+  String storeName = kStoreName,
+  ReceiptTemplate? template,
+}) {
+  final effective = template ??
+      ReceiptTemplate(storeName: storeName.isEmpty ? kStoreName : storeName);
+  return effective.renderFromSale(sale);
+}
+
+/// Load persisted template then render sale (print + PDF path).
+Future<String> buildPrintReceiptTextFromSaleAsync(
+  SaleRecord sale, {
+  PosRepository? repo,
+  String? storeNameOverride,
+}) async {
+  final r = repo ?? PosRepository();
+  var template = await ReceiptTemplate.load(r);
+  if (storeNameOverride != null && storeNameOverride.trim().isNotEmpty) {
+    template = template.copyWith(storeName: storeNameOverride.trim());
+  }
+  return template.renderFromSale(sale);
 }
 
 String shortWhatsAppCaption(SaleRecord sale, {String storeName = kStoreName}) =>
@@ -185,8 +140,20 @@ String buildEReceiptTextFromSale(SaleRecord sale) =>
 Future<File> writeReceiptPdfTemp(
   SaleRecord sale, {
   String storeName = kStoreName,
+  ReceiptTemplate? template,
+  PosRepository? repo,
 }) async {
-  final text = buildPrintReceiptTextFromSale(sale, storeName: storeName);
+  final ReceiptTemplate effective;
+  if (template != null) {
+    effective = template;
+  } else if (repo != null) {
+    effective = await ReceiptTemplate.load(repo);
+  } else {
+    effective = ReceiptTemplate(
+      storeName: storeName.isEmpty ? kStoreName : storeName,
+    );
+  }
+  final text = effective.renderFromSale(sale);
   final doc = pw.Document();
   // 80mm thermal-ish page width
   const pageWidth = 80.0 * PdfPageFormat.mm;
@@ -265,37 +232,151 @@ Future<String> maybeEnsureContact({
   }
 }
 
-/// Share print-layout PDF via system share (prefer WhatsApp) + optional caption chat.
-/// Temp PDF is always deleted in ``finally``.
+/// App-private e-receipt PDF cache (not public gallery). Keep 7 days.
+const Duration kEReceiptCacheTtl = Duration(days: 7);
+
+/// Default cache under application support (when setting empty).
+Future<String> defaultEReceiptCachePath() async {
+  final root = await getApplicationSupportDirectory();
+  return '${root.path}/e_receipt_cache';
+}
+
+/// Reads `ereceipt_cache_dir` from SQLite settings, else app support/e_receipt_cache.
+Future<Directory> eReceiptCacheDir() async {
+  String custom = '';
+  try {
+    custom = (await PosRepository().getSetting(kEReceiptCacheDirKey)).trim();
+  } catch (_) {}
+  final path = custom.isNotEmpty ? custom : await defaultEReceiptCachePath();
+  final dir = Directory(path);
+  if (!await dir.exists()) {
+    await dir.create(recursive: true);
+  }
+  return dir;
+}
+
+/// Delete cached PDFs older than [kEReceiptCacheTtl]. Returns deleted count.
+Future<int> purgeEReceiptCache({Duration ttl = kEReceiptCacheTtl}) async {
+  final dir = await eReceiptCacheDir();
+  final cutoff = DateTime.now().subtract(ttl);
+  var n = 0;
+  await for (final ent in dir.list()) {
+    if (ent is! File) continue;
+    if (!ent.path.toLowerCase().endsWith('.pdf')) continue;
+    try {
+      final st = await ent.stat();
+      if (st.modified.isBefore(cutoff)) {
+        await ent.delete();
+        n++;
+      }
+    } catch (_) {}
+  }
+  return n;
+}
+
+/// Delete all cached e-receipt PDFs. Returns deleted count.
+Future<int> clearEReceiptCache() async {
+  final dir = await eReceiptCacheDir();
+  var n = 0;
+  await for (final ent in dir.list()) {
+    if (ent is! File) continue;
+    if (!ent.path.toLowerCase().endsWith('.pdf')) continue;
+    try {
+      await ent.delete();
+      n++;
+    } catch (_) {}
+  }
+  return n;
+}
+
+Future<int> countEReceiptCache() async {
+  final dir = await eReceiptCacheDir();
+  var n = 0;
+  await for (final ent in dir.list()) {
+    if (ent is File && ent.path.toLowerCase().endsWith('.pdf')) n++;
+  }
+  return n;
+}
+
+/// Write PDF into private cache. Filename is stable per receipt.
+/// Does **not** delete after share — purge old files on startup / explicitly.
+Future<File> writeReceiptPdfCached(
+  SaleRecord sale, {
+  String storeName = kStoreName,
+  ReceiptTemplate? template,
+  PosRepository? repo,
+}) async {
+  final dir = await eReceiptCacheDir();
+  final safe = sale.receiptNo.replaceAll(RegExp(r'[^A-Za-z0-9_-]'), '_');
+  final file = File('${dir.path}/receipt_$safe.pdf');
+  final tmp = await writeReceiptPdfTemp(
+    sale,
+    storeName: storeName,
+    template: template,
+    repo: repo,
+  );
+  try {
+    await tmp.copy(file.path);
+  } finally {
+    try {
+      if (await tmp.exists()) await tmp.delete();
+    } catch (_) {}
+  }
+  return file;
+}
+
+/// Share e-receipt PDF:
+/// - **Android**: open WhatsApp directly with PDF attached (ACTION_SEND + EXTRA_STREAM).
+/// - **Other platforms**: system share sheet only (no wa.me — cannot attach PDF).
+/// PDF stays in 7-day cache; never deleted right after share.
 Future<String> shareEReceiptPdf({
   required SaleRecord sale,
   required String phoneRaw,
   String storeName = kStoreName,
+  ReceiptTemplate? template,
+  PosRepository? repo,
 }) async {
   final digits = normalizeMyPhone(phoneRaw);
   if (digits.isEmpty) throw ArgumentError('invalid phone');
-  File? pdf;
-  try {
-    pdf = await writeReceiptPdfTemp(sale, storeName: storeName);
-    final caption = shortWhatsAppCaption(sale, storeName: storeName);
-    await Share.shareXFiles(
-      [XFile(pdf.path, mimeType: 'application/pdf', name: 'CNKH_${sale.receiptNo}.pdf')],
-      text: caption,
-      subject: 'CNKH E-Receipt ${sale.receiptNo}',
-    );
-    // Also open wa.me with short caption so chat is ready
-    final uri = whatsAppUri(digits, caption);
+  final pdf = await writeReceiptPdfCached(
+    sale,
+    storeName: storeName,
+    template: template,
+    repo: repo,
+  );
+  final caption = shortWhatsAppCaption(sale, storeName: storeName);
+
+  if (!kIsWeb && Platform.isAndroid) {
     try {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } catch (_) {}
-    return '已分享收据 PDF / Receipt PDF shared';
-  } finally {
-    try {
-      if (pdf != null && await pdf.exists()) {
-        await pdf.delete();
+      const channel = MethodChannel(kWhatsAppShareChannel);
+      final ok = await channel.invokeMethod<bool>('sharePdf', {
+        'path': pdf.path,
+        'text': caption,
+        'phone': digits,
+      });
+      if (ok == true) {
+        return '已打开 WhatsApp（PDF 已附加）。文件已缓存 7 天。\n'
+            'Opened WhatsApp with PDF attached. Cached 7 days.';
       }
-    } catch (_) {}
+    } catch (_) {
+      // Fall through to system share if WhatsApp missing / channel error.
+    }
   }
+
+  // Non-Android (or Android fallback): Share.shareXFiles only — never wa.me after.
+  await Share.shareXFiles(
+    [
+      XFile(
+        pdf.path,
+        mimeType: 'application/pdf',
+        name: 'CNKH_${sale.receiptNo}.pdf',
+      ),
+    ],
+    text: caption,
+    subject: 'E-Receipt ${sale.receiptNo}',
+  );
+  return '已打开系统分享（请选 WhatsApp 发送 PDF）。文件已缓存 7 天。\n'
+      'Shared via system sheet — pick WhatsApp. PDF cached 7 days.';
 }
 
 Future<bool> openWhatsApp({
