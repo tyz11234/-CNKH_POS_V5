@@ -29,7 +29,7 @@ def test_build_e_receipt_text_print_style():
             }
         ],
     )
-    assert "CNKH Hardware" in text
+    assert "黄金发宝号" in text
     assert "Receipt: R001" in text
     assert "Hammer" in text
     assert "TOTAL" in text

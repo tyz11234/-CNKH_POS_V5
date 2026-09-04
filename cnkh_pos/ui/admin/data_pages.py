@@ -37,6 +37,7 @@ from cnkh_pos.services.catalog import CatalogService, ProductInput
 from cnkh_pos.services.entities import EntityInput, EntityService
 from cnkh_pos.services.excel_import import ExcelImportService
 from cnkh_pos.services.maintenance import AuditMaintenanceService
+from cnkh_pos.services.e_receipt import clear_e_receipt_cache, count_e_receipt_cache, e_receipt_cache_dir
 from cnkh_pos.services.money import rm_to_cents
 from cnkh_pos.services.payments import CustomerPaymentService, SupplierPaymentService
 from cnkh_pos.services.printing import PrintingService
@@ -1357,6 +1358,8 @@ class MaintenancePage(QWidget):
             ("Backup", self.backup, "SuccessButton"),
             ("Restore", self.restore, "WarningButton"),
             ("Open Error Log Folder", self.open_log_folder, ""),
+            ("Clear E-Receipt Cache / 清电子收据缓存", self.clear_ereceipt_cache, "WarningButton"),
+            ("Open E-Receipt Cache / 打开收据缓存", self.open_ereceipt_cache, ""),
         ):
             button = QPushButton(text)
             button.setObjectName(style)
@@ -1383,7 +1386,7 @@ class MaintenancePage(QWidget):
             f"Backup Path: {AppPaths.default().backups}\nLog Path: {AppPaths.default().logs}\n"
             f"Export Path: {AppPaths.default().exports}\nReceipt Path: {AppPaths.default().receipts}\n"
             f"Database Size: {self.database.path.stat().st_size:,} bytes\n"
-            f"Product Count: {products}\nSale Count: {sales}"
+            f"Product Count: {products}\nSale Count: {sales}\nE-Receipt Cache: {count_e_receipt_cache()} PDF(s) @ {AppPaths.default().ereceipt_cache}"
         )
 
     def integrity(self) -> None:
@@ -1461,3 +1464,21 @@ class MaintenancePage(QWidget):
         paths.ensure_directories()
         if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.logs))):
             QMessageBox.information(self, "Error Log", str(paths.logs))
+
+    def clear_ereceipt_cache(self) -> None:
+        n = count_e_receipt_cache()
+        reply = QMessageBox.question(
+            self,
+            "Clear E-Receipt Cache",
+            f"清空电子收据私有缓存？\n当前约 {n} 个 PDF（通常保留 7 天）。",
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        deleted = clear_e_receipt_cache()
+        QMessageBox.information(self, "E-Receipt Cache", f"已删除 {deleted} 个 PDF。")
+        self.refresh()
+
+    def open_ereceipt_cache(self) -> None:
+        path = e_receipt_cache_dir()
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+            QMessageBox.information(self, "E-Receipt Cache", str(path))

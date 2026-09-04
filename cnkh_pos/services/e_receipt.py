@@ -1,13 +1,17 @@
 """WhatsApp e-receipt helpers for CNKH POS (PC).
 
 Primary payload is the **same PDF layout** as thermal/print
-(``PrintingService.render_pdf`` / ``render_text``). Temp file only; deleted
-after share attempt.
+(``PrintingService.render_pdf`` / ``render_text``).
+
+PDFs stay in private EReceiptCache for 7 days then purge.
+Do not auto-open wa.me (cannot attach files).
 """
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 import tempfile
 import time
 import webbrowser
@@ -18,9 +22,10 @@ from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication
 
+from cnkh_pos.config import AppPaths
 from cnkh_pos.services.printing import PrintingService, Receipt
 
-STORE_NAME = "CNKH Hardware"
+STORE_NAME = "黄金发宝号"
 
 
 def normalize_my_phone(raw: str) -> str:
@@ -93,6 +98,64 @@ def customer_phone_for_sale(database, sale_id: int) -> tuple[str, str]:
         conn.close()
 
 
+
+ERECEIPT_TTL_DAYS = 7
+
+
+def e_receipt_cache_dir() -> Path:
+    paths = AppPaths.default()
+    paths.ensure_directories()
+    d = paths.ereceipt_cache
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def purge_e_receipt_cache(*, ttl_days: int = ERECEIPT_TTL_DAYS) -> int:
+    """Delete cached PDFs older than ttl_days. Returns deleted count."""
+    d = e_receipt_cache_dir()
+    cutoff = time.time() - ttl_days * 86400
+    n = 0
+    for child in d.glob("*.pdf"):
+        try:
+            if child.stat().st_mtime < cutoff:
+                child.unlink(missing_ok=True)
+                n += 1
+        except OSError:
+            pass
+    return n
+
+
+def clear_e_receipt_cache() -> int:
+    """Delete all cached e-receipt PDFs. Returns deleted count."""
+    d = e_receipt_cache_dir()
+    n = 0
+    for child in d.glob("*.pdf"):
+        try:
+            child.unlink(missing_ok=True)
+            n += 1
+        except OSError:
+            pass
+    return n
+
+
+def count_e_receipt_cache() -> int:
+    return sum(1 for _ in e_receipt_cache_dir().glob("*.pdf"))
+
+
+def _reveal_in_file_manager(path: Path) -> bool:
+    """Open file manager with the PDF selected (Windows/Linux/macOS)."""
+    path = path.resolve()
+    try:
+        if os.name == "nt":
+            subprocess.Popen(["explorer", f"/select,{path}"])
+            return True
+        if path.parent.exists():
+            return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.parent))))
+    except Exception:
+        pass
+    return bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))))
+
+
 def render_print_receipt_pdf(database, sale_id: int, path: Path) -> tuple[Receipt, Path]:
     """Write the official print-layout PDF to ``path``."""
     printing = PrintingService(database)
@@ -108,69 +171,42 @@ def send_e_receipt_pdf(
     phone_raw: str,
     customer_name: str = "",
 ) -> tuple[bool, str]:
-    """Generate print PDF in temp → open/share → open WhatsApp caption → delete.
+    """Write print PDF into private 7-day cache and open it for OS share.
 
-    Returns (ok, message).
+    Does not auto-open wa.me (cannot attach PDF). Returns (ok, message).
     """
     digits = normalize_my_phone(phone_raw)
     if not digits:
         return False, "invalid phone"
 
-    tmp_dir = Path(tempfile.mkdtemp(prefix="cnkh_ereceipt_"))
-    pdf_path = tmp_dir / f"CNKH_Receipt_{sale_id}.pdf"
+    purged = purge_e_receipt_cache()
+    cache = e_receipt_cache_dir()
+    pdf_path = cache / f"CNKH_Receipt_{sale_id}.pdf"
+    receipt, pdf_path = render_print_receipt_pdf(database, sale_id, pdf_path)
+    caption = short_whatsapp_caption(receipt)
+    print_text = PrintingService.render_text(receipt)
+
     try:
-        receipt, pdf_path = render_print_receipt_pdf(database, sale_id, pdf_path)
-        caption = short_whatsapp_caption(receipt)
-        # Also expose full print text as secondary (clipboard) for staff
-        print_text = PrintingService.render_text(receipt)
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(caption + "\n\n---\n" + print_text)
+    except Exception:
+        pass
 
-        # 1) Open PDF so user can attach / share via WhatsApp Desktop
-        opened_pdf = bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(pdf_path))))
-        # Copy print text to clipboard if possible
-        try:
-            clipboard = QApplication.clipboard()
-            if clipboard is not None:
-                clipboard.setText(print_text)
-        except Exception:
-            pass
+    opened_pdf = bool(QDesktopServices.openUrl(QUrl.fromLocalFile(str(pdf_path))))
+    revealed = _reveal_in_file_manager(pdf_path)
 
-        # 2) Open WhatsApp chat with short caption (PDF must be attached manually
-        #    on Desktop/Web — wa.me cannot attach files)
-        url = whatsapp_url(digits, caption)
-        try:
-            QDesktopServices.openUrl(QUrl(url))
-        except Exception:
-            webbrowser.open(url)
+    msg = (
+        "已生成打印版收据 PDF，并放入私有缓存（保留 7 天，到期自动删）。\n"
+        "请用系统分享 / 拖到 WhatsApp 发送给客户（不要依赖 wa.me，无法带附件）。\n"
+        "说明文字+小票文本已复制到剪贴板。\n"
+        f"路径: {pdf_path}\n"
+        f"PDF opened={opened_pdf} folder={revealed} purged={purged}"
+    )
+    if customer_name:
+        msg = f"客户 / Customer: {customer_name}\n" + msg
+    return True, msg
 
-        # Brief pause so OS / WhatsApp can read the file before cleanup
-        time.sleep(1.2)
-        msg = (
-            "已生成打印版收据 PDF（临时文件）并打开 WhatsApp。\n"
-            "请在 WhatsApp 中附加刚打开的 PDF 发送给客户。\n"
-            "完整小票文本已复制到剪贴板（可选）。\n"
-            f"PDF opened={opened_pdf}"
-        )
-        if customer_name:
-            msg = f"客户 / Customer: {customer_name}\n" + msg
-        return True, msg
-    finally:
-        # Mandatory cleanup — never leave junk PDFs
-        try:
-            if pdf_path.exists():
-                pdf_path.unlink()
-        except Exception:
-            pass
-        try:
-            # remove empty temp dir (ignore if still locked briefly)
-            if tmp_dir.exists():
-                for child in tmp_dir.iterdir():
-                    try:
-                        child.unlink()
-                    except Exception:
-                        pass
-                tmp_dir.rmdir()
-        except Exception:
-            pass
 
 
 # Back-compat helpers used by unit tests / older call sites

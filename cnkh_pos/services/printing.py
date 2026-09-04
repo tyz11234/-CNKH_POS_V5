@@ -242,7 +242,7 @@ class PrintingService:
                 json.loads(setting[0])
                 if setting
                 else {
-                    "store_name": "CNKH Hardware",
+                    "store_name": "黄金发宝号",
                     "address": "",
                     "phone": "",
                     "footer": "Thank you / 谢谢光临",
@@ -275,7 +275,7 @@ class PrintingService:
         lines: list[str] = []
         lines.extend(
             _centered_setting_lines(
-                receipt.settings.get("store_name", "CNKH Hardware"), width
+                receipt.settings.get("store_name", "黄金发宝号"), width
             )
         )
         lines.extend(_centered_setting_lines(receipt.settings.get("address", ""), width))
@@ -343,7 +343,7 @@ class PrintingService:
 
         sections = [
             '<div class="center store">'
-            + esc(receipt.settings.get("store_name", "CNKH Hardware"))
+            + esc(receipt.settings.get("store_name", "黄金发宝号"))
             + "</div>",
         ]
         address = str(receipt.settings.get("address", "")).strip()
