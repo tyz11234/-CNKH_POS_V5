@@ -218,3 +218,49 @@ def test_daily_cash_and_receipt_use_final_rounded_total(database_and_admin) -> N
     assert any(line.startswith("TOTAL") and line.endswith("RM 0.70") for line in lines)
     assert any(line.startswith("PAID") and line.endswith("RM 0.70") for line in lines)
     assert any(line.startswith("CHANGE") and line.endswith("RM 0.00") for line in lines)
+
+
+def test_credit_down_payment_counts_in_daily_cash(database_and_admin) -> None:
+    database, admin_id = database_and_admin
+    with database.transaction() as conn:
+        customer_id = int(
+            conn.execute(
+                "INSERT INTO customers(name,created_at,updated_at) VALUES ('Deposit Customer',datetime('now'),datetime('now'))"
+            ).lastrowid
+        )
+    product_id = _product(database, admin_id, 1000, "Credit Deposit Item")
+    RoundedSalesService(database).create_sale(
+        lines=[SaleLine(product_id, Decimal("1"), Decimal("1"))],
+        payment_method="CREDIT",
+        paid_cents=300,
+        cashier_id=admin_id,
+        customer_id=customer_id,
+    )
+    assert DailyClosingService(database).system_cash(business_date=date.today()) == 300
+
+
+def test_rounded_sale_writes_settlement_in_single_create(database_and_admin) -> None:
+    """Regression: settlement must not rely on a post-commit UPDATE."""
+    database, admin_id = database_and_admin
+    product_id = _product(database, admin_id, 42, "Atomic Round")
+    sale = RoundedSalesService(database).create_sale(
+        lines=[SaleLine(product_id, Decimal("1"), Decimal("1"))],
+        payment_method="CASH",
+        paid_cents=40,
+        cashier_id=admin_id,
+    )
+    conn = database.connect(readonly=True)
+    try:
+        row = conn.execute(
+            "SELECT subtotal_cents,discount_cents,total_cents,paid_cents,change_cents FROM sales WHERE id=?",
+            (sale.sale_id,),
+        ).fetchone()
+        rounding_audits = conn.execute(
+            """SELECT COUNT(*) FROM audit_logs
+               WHERE action='ROUNDING' AND record_type='SALE' AND record_id=?""",
+            (sale.sale_id,),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    assert tuple(row) == (42, 0, 40, 40, 0)
+    assert int(rounding_audits) == 1
