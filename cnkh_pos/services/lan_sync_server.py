@@ -15,8 +15,9 @@ import struct
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any, Callable
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from cnkh_pos.database.connection import Database
@@ -504,7 +505,7 @@ def _make_handler(database: Database, expected_token: str, server: LanSyncServer
                     for event in events:
                         last = int(event["seq"])
                         data = json.dumps(event, ensure_ascii=False)
-                        self.wfile.write(f"data: {data}\n\n".encode("utf-8"))
+                        self.wfile.write(f"data: {data}\n\n".encode())
                     self.wfile.flush()
             except Exception:
                 return

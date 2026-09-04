@@ -42,21 +42,20 @@ from cnkh_pos.services.document_numbers import (
     document_prefixes,
     save_document_prefixes,
 )
+from cnkh_pos.services.lan_sync_server import (
+    DEFAULT_PORT,
+    detect_lan_ip,
+    get_active_server,
+    start_global_server,
+    stop_global_server,
+)
 from cnkh_pos.services.money import format_myr, rm_to_cents
 from cnkh_pos.services.printing import (
     WINDOWS_DEFAULT_PRINTER,
     resolve_printer_target,
 )
 from cnkh_pos.services.reports import ReportService
-from cnkh_pos.services.lan_sync_server import (
-    DEFAULT_PORT,
-    detect_lan_ip,
-    get_active_server,
-    pairing_payload,
-    start_global_server,
-    stop_global_server,
-)
-from cnkh_pos.ui.dialogs.sync_pair_dialog import open_sync_pair_dialog, _qr_pixmap
+from cnkh_pos.ui.dialogs.sync_pair_dialog import open_sync_pair_dialog
 
 
 class CategoryDialog(QDialog):
@@ -770,6 +769,7 @@ class LanSyncSettingsWidget(QWidget):
 
 def _save_setting(database: Database, user: AuthenticatedUser, key: str, value: str) -> None:
     import json as _json
+
     from cnkh_pos.database.migrations import utc_now_text
     with database.transaction() as conn:
         conn.execute(
@@ -834,16 +834,27 @@ class SettingsPage(QWidget):
         general_layout.addLayout(hold_row)
         # load current
         try:
+            import json as _json
+
             conn = database.connect(readonly=True)
-            row = conn.execute(
+            stock_row = conn.execute(
                 "SELECT value_json FROM settings WHERE key='stock_policy'"
             ).fetchone()
             hold = conn.execute(
                 "SELECT value_json FROM settings WHERE key='hold_timeout_minutes'"
             ).fetchone()
             conn.close()
+            if stock_row and stock_row[0]:
+                try:
+                    policy = str(_json.loads(stock_row[0]))
+                except Exception:
+                    policy = str(stock_row[0]).strip('"') or "warn"
+                # Visual cue only — buttons still save on click
+                if policy == "block":
+                    self._stock_block.setDefault(True)
+                else:
+                    self._stock_warn.setDefault(True)
             if hold and hold[0]:
-                import json as _json
                 try:
                     self._hold_timeout.setText(str(_json.loads(hold[0])))
                 except Exception:

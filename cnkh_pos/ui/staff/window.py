@@ -31,6 +31,7 @@ from cnkh_pos.config import AppPaths
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.held_orders import HeldOrderService, cart_state_from_held_payload
+from cnkh_pos.services.lan_sync_server import publish_sync_event
 from cnkh_pos.services.money import (
     clamp_discount_cents,
     format_myr,
@@ -42,13 +43,12 @@ from cnkh_pos.services.product_search import search_products
 from cnkh_pos.services.sales import SaleLine, SalesService
 from cnkh_pos.ui.dialogs.checkout import CheckoutDialog, SaleCompletedDialog
 from cnkh_pos.ui.dialogs.e_receipt_dialog import send_e_receipt_for_sale
+from cnkh_pos.ui.widgets import Card
 from cnkh_pos.ui.widgets.sync_toolbar import (
     make_sync_pair_button,
     make_sync_status_label,
     sync_event_bridge,
 )
-from cnkh_pos.services.lan_sync_server import publish_sync_event
-from cnkh_pos.ui.widgets import Card
 
 
 class StaffWindow(QMainWindow):
@@ -145,6 +145,7 @@ class StaffWindow(QMainWindow):
     def _refresh_hold_overdue(self) -> None:
         try:
             from datetime import datetime, timedelta
+
             from cnkh_pos.services.held_orders import HeldOrderService
             mins = self._hold_timeout_minutes()
             cutoff = datetime.utcnow() - timedelta(minutes=mins)

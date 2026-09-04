@@ -25,7 +25,9 @@ from cnkh_pos.ui.admin.enhanced_data_pages import (
 )
 from cnkh_pos.ui.admin.settings_pages import DailyClosingPage, ReportsPage, SettingsPage
 from cnkh_pos.ui.admin.users_page import UsersPage
+from cnkh_pos.ui.dialogs.sync_pair_dialog import open_sync_pair_dialog
 from cnkh_pos.ui.widgets import Sidebar
+from cnkh_pos.ui.widgets.sync_toolbar import sync_event_bridge
 
 
 class AdminWindow(QMainWindow):
@@ -98,3 +100,14 @@ class AdminWindow(QMainWindow):
 
     def _select_page(self, key: str) -> None:
         self.pages.setCurrentIndex(self.page_keys[key])
+
+    def _on_sync_event(self, event: dict) -> None:
+        """Refresh sales UI when phone pushes a sale over LAN sync."""
+        try:
+            page = self._sales_page
+            if page is not None and hasattr(page, "reload"):
+                page.reload()
+            elif page is not None and hasattr(page, "refresh"):
+                page.refresh()
+        except Exception:
+            pass

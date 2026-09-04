@@ -6,12 +6,12 @@ from PySide6.QtWidgets import QMessageBox
 from cnkh_pos.config import AppPaths
 from cnkh_pos.services.checkout_rounding import RoundedSalesService
 from cnkh_pos.services.discounts import allocate_order_discount
+from cnkh_pos.services.lan_sync_server import publish_sync_event
 from cnkh_pos.services.money import clamp_discount_cents, line_amount_cents
 from cnkh_pos.services.sales import SaleLine
 from cnkh_pos.ui.dialogs.checkout import SaleCompletedDialog
-from cnkh_pos.ui.dialogs.e_receipt_dialog import send_e_receipt_for_sale
-from cnkh_pos.services.lan_sync_server import publish_sync_event
 from cnkh_pos.ui.dialogs.discount import DiscountDialog
+from cnkh_pos.ui.dialogs.e_receipt_dialog import send_e_receipt_for_sale
 from cnkh_pos.ui.dialogs.rounded_checkout import RoundedCheckoutDialog
 from cnkh_pos.ui.staff.window import StaffWindow as BaseStaffWindow
 

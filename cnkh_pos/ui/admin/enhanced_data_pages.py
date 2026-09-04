@@ -8,7 +8,6 @@ from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.catalog import CatalogService, ProductInput
 from cnkh_pos.services.checkout_rounding import RoundedReturnService
-from cnkh_pos.ui.dialogs.e_receipt_dialog import send_e_receipt_for_sale
 from cnkh_pos.services.sales import SalesService
 from cnkh_pos.ui.admin.data_pages import (
     ProductDialog,
@@ -16,6 +15,7 @@ from cnkh_pos.ui.admin.data_pages import (
     ReturnSaleDialog,
     SalesPage,
 )
+from cnkh_pos.ui.dialogs.e_receipt_dialog import send_e_receipt_for_sale
 
 
 class ProductDialogWithBarcodeMode(ProductDialog):

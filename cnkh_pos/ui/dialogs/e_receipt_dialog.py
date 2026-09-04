@@ -5,10 +5,10 @@ from __future__ import annotations
 from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from cnkh_pos.services.e_receipt import (
+    customer_phone_for_sale,
     normalize_my_phone,
     send_e_receipt_pdf,
     write_contact_vcf,
-    customer_phone_for_sale,
 )
 
 
