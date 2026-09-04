@@ -96,6 +96,9 @@ class BarcodeLabelsPage(QWidget):
         actions.addStretch(1)
         preview_button = QPushButton("导出 PDF 预览")
         preview_button.clicked.connect(self.export_pdf)
+        queue_button = QPushButton("加载手机打印队列 / Load phone queue")
+        queue_button.clicked.connect(self.load_phone_queue)
+        actions.addWidget(queue_button)
         print_button = QPushButton("打印条码标签")
         print_button.setObjectName("PrimaryButton")
         print_button.setProperty("acceptanceName", "BarcodeLabelPrintButton")
@@ -179,6 +182,41 @@ class BarcodeLabelsPage(QWidget):
             )
         except Exception as exc:
             QMessageBox.warning(self, "Barcode Labels", str(exc))
+
+    def load_phone_queue(self) -> None:
+        """Merge pending items from LAN sync barcode_print_queue.json into the table selection."""
+        import json
+        from pathlib import Path
+
+        from PySide6.QtWidgets import QMessageBox
+        path = Path(self.database.path).resolve().parent / "barcode_print_queue.json"
+        if not path.exists():
+            QMessageBox.information(self, "Barcode Queue", "暂无手机队列 / No phone queue file")
+            return
+        try:
+            items = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            QMessageBox.warning(self, "Barcode Queue", str(exc))
+            return
+        pending = [x for x in items if isinstance(x, dict) and x.get("status") == "pending"]
+        if not pending:
+            QMessageBox.information(self, "Barcode Queue", "队列为空 / Queue empty")
+            return
+        # Prefer filter/search by barcode list
+        barcodes = [str(x.get("barcode") or "") for x in pending if x.get("barcode")]
+        if hasattr(self, "search") and barcodes:
+            self.search.setText(barcodes[0])
+            if hasattr(self, "reload"):
+                self.reload()
+            elif hasattr(self, "refresh"):
+                self.refresh()
+        QMessageBox.information(
+            self,
+            "Barcode Queue",
+            f"手机队列 {len(pending)} 项。请在列表勾选后打印。\n"
+            f"Phone queue has {len(pending)} item(s); select rows then Print.",
+        )
+
 
     def print_labels(self) -> None:
         try:

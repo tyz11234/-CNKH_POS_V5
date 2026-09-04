@@ -31,6 +31,10 @@ from cnkh_pos.config import AppPaths
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.held_orders import HeldOrderService, cart_state_from_held_payload
+from cnkh_pos.services.lan_sync_server import (
+    publish_low_stock_events,
+    publish_sync_event,
+)
 from cnkh_pos.services.money import (
     clamp_discount_cents,
     format_myr,
@@ -41,7 +45,13 @@ from cnkh_pos.services.printing import PrintingService
 from cnkh_pos.services.product_search import search_products
 from cnkh_pos.services.sales import SaleLine, SalesService
 from cnkh_pos.ui.dialogs.checkout import CheckoutDialog, SaleCompletedDialog
+from cnkh_pos.ui.dialogs.e_receipt_dialog import send_e_receipt_for_sale
 from cnkh_pos.ui.widgets import Card
+from cnkh_pos.ui.widgets.sync_toolbar import (
+    make_sync_pair_button,
+    make_sync_status_label,
+    sync_event_bridge,
+)
 
 
 class StaffWindow(QMainWindow):
@@ -94,8 +104,69 @@ class StaffWindow(QMainWindow):
         user.setObjectName("TopBarMeta")
         layout.addWidget(title)
         layout.addStretch(1)
+        layout.addWidget(make_sync_status_label())
+        layout.addWidget(make_sync_pair_button(self, self.database))
+        self.hold_overdue_label = QLabel("")
+        self.hold_overdue_label.setStyleSheet("color:#B26A00;font-weight:800;")
+        layout.addWidget(self.hold_overdue_label)
         layout.addWidget(user)
+        from PySide6.QtCore import QTimer
+        self._hold_timer = QTimer(self)
+        self._hold_timer.timeout.connect(self._refresh_hold_overdue)
+        self._hold_timer.start(60000)
+        self._refresh_hold_overdue()
+        # Live refresh when phone pushes a sale
+        sync_event_bridge().sale_event.connect(self._on_sync_event)
         return bar
+
+    def _on_sync_event(self, event: dict) -> None:
+        if str(event.get("type") or "") != "sale":
+            return
+        # Soft refresh product stock after remote sale
+        try:
+            self._load_product_table()
+        except Exception:
+            pass
+
+    def _hold_timeout_minutes(self) -> int:
+        try:
+            conn = self.database.connect(readonly=True)
+            row = conn.execute(
+                "SELECT value_json FROM settings WHERE key='hold_timeout_minutes'"
+            ).fetchone()
+            conn.close()
+            if row and row[0]:
+                import json as _json
+                try:
+                    return int(_json.loads(row[0]))
+                except Exception:
+                    return int(str(row[0]).strip('"') or 30)
+        except Exception:
+            pass
+        return 30
+
+    def _refresh_hold_overdue(self) -> None:
+        try:
+            from datetime import datetime, timedelta
+
+            from cnkh_pos.services.held_orders import HeldOrderService
+            mins = self._hold_timeout_minutes()
+            cutoff = datetime.utcnow() - timedelta(minutes=mins)
+            held = HeldOrderService(self.database).list_held(cashier_id=self.user.id)
+            overdue = 0
+            for h in held:
+                try:
+                    ts = datetime.fromisoformat(str(h.held_at).replace("Z", ""))
+                    if ts < cutoff:
+                        overdue += 1
+                except Exception:
+                    pass
+            if overdue:
+                self.hold_overdue_label.setText(f"⚠挂单超时 {overdue}")
+            else:
+                self.hold_overdue_label.setText("")
+        except Exception:
+            self.hold_overdue_label.setText("")
 
     def _search_bar(self) -> QHBoxLayout:
         layout = QHBoxLayout()
@@ -366,6 +437,8 @@ class StaffWindow(QMainWindow):
             self,
             customers=self._customers(),
             quick_settings_callback=self._open_quick_amount_settings,
+            paths=AppPaths.default(),
+            is_admin=self.user.role == "ADMIN",
         )
         if dialog.exec() != CheckoutDialog.DialogCode.Accepted:
             return
@@ -385,6 +458,7 @@ class StaffWindow(QMainWindow):
                 paid_cents=dialog.paid_cents,
                 cashier_id=self.user.id,
                 customer_id=dialog.customer_id,
+                deposit_method=dialog.deposit_method,
             )
         except Exception as exc:
             QMessageBox.critical(self, "Checkout", str(exc))
@@ -397,10 +471,24 @@ class StaffWindow(QMainWindow):
             result.paid_cents,
             dialog.payment_method,
             self,
+            sale_id=result.sale_id,
+            database=self.database,
         )
         completed.exec()
         if completed.print_requested:
             self._print_sale(result.sale_id)
+        if getattr(completed, "ereceipt_requested", False):
+            send_e_receipt_for_sale(self, self.database, result.sale_id)
+        try:
+            publish_sync_event(
+                "sale",
+                source="pc",
+                receipt_no=result.receipt_no,
+                sale_id=result.sale_id,
+            )
+            publish_low_stock_events(self.database)
+        except Exception:
+            pass
 
     def _load_product_table(self) -> None:
         if not hasattr(self, "category_filter"):

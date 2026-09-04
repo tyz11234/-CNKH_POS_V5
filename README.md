@@ -1,45 +1,87 @@
-# CNKH Hardware POS V5.0
+# 黄金发宝号 · CNKH Hardware POS V5
 
-Windows 离线 POS + Inventory 系统。V5 使用 **Python 3.12、PySide6 / Qt 6 与 SQLite**，不会覆盖或修改 V4 源代码。
+Windows **离线收银 + 库存**（Python 3.12 / PySide6 / SQLite）。可与手机端 [CNKH_POS_Mobile_APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK) 在同一局域网配对同步，**不走云**。
 
-> 当前状态：`5.0.0-alpha.4 / Run #8 Stabilization Source Candidate`。2026-08-10 已从当前源码重新通过 pytest、unittest、Source Self-Test、compileall、workflow YAML、版本一致性与数据库结构/外键回归；本执行环境没有 PySide6 且无法取得 Ruff，因此三档 GUI 与 Ruff 本轮为 BLOCKED。Admin/Staff EXE、Setup、静默安装及安装后两个自检仍必须在真实 Windows runner 全部通过后，才能称为 Windows Installation Candidate。
+店铺对外店名：**黄金发宝号**（软件内部工程名仍为 CNKH POS）。
 
-## Run #8 主要完成内容
+---
 
-- Admin 员工账号新增、编辑权限、重设密码、启用/停用和最后管理员保护。
-- 客户/供应商手机号、Email（供应商）、备注、编辑、安全删除和付款备注/方式。
-- 供应商商品多对多目录；新建进货只显示并只允许保存该供应商商品。
-- 重复进货行合并、删除进货负库存保护、付款历史 void 保留。
-- Staff 商品真实分页、折扣/快捷金额/重印权限、挂单按收银员隔离。
-- 折扣后净额退货、Credit 欠款调整、日期报表与精确毛利、完整现金日结。
-- 明确打印机选择、离线错误、80mm 测试 PDF、收据内容与自定义单号前缀。
-- Audit Log 管理员密码保护清除、清除前备份、独立系统检查记录。
-- 关闭 Admin/Staff 自动备份，同一次关闭流程只建立一份并保留最近 30 份。
+## 30 秒看懂
 
-## 店铺电脑下载安装（Windows 门禁通过后，不需要 Python）
+| 你是谁 | 用什么 | 去哪拿 |
+|--------|--------|--------|
+| 店里收银 / 管货 | **PC 安装包** | Actions 绿色 run → Artifact `CNKH-Hardware-POS-V5-Windows` |
+| 手机收银 / 扫码 | **Android APK** | [手机端 Releases](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases) |
+| 两边一起用 | PC 开「同步/配对」+ 手机扫配对码 | 见下方「局域网配对」 |
 
-1. 在仓库打开 **Actions → Windows Release Gate**。
-2. 选择最新一项全部绿色的运行记录。
-3. 在页面底部下载 Artifact：`CNKH-Hardware-POS-V5-Windows`。
-4. 解压后运行 `CNKH_Hardware_POS_V5_Setup.exe`。
-5. 第一次必须启动 **CNKH POS Admin**，建立首个管理员；之后才可登录 Staff。
+---
 
-不要从失败或尚在运行的 Actions 记录下载安装包。详细步骤见 [GitHub 构建与下载说明](docs/GITHUB_BUILD_AND_DOWNLOAD_CN.md)。
+## 店铺电脑怎么装（不需要 Python）
 
-## 安全原则
+1. 打开本仓库 **Actions → Windows Release Gate**
+2. 选**最新全部绿色**的运行记录（不要下失败/进行中的）
+3. 下载 Artifact：`CNKH-Hardware-POS-V5-Windows`
+4. 解压后运行 `CNKH_Hardware_POS_V5_Setup.exe`
+5. **第一次**先开 **CNKH POS Admin**，建管理员；之后再开 Staff
 
-- 默认数据库：`%LOCALAPPDATA%\CNKH Hardware POS\Data\hardware_pos.db`
-- 备份：`%LOCALAPPDATA%\CNKH Hardware POS\Backups`
-- 日志：`%LOCALAPPDATA%\CNKH Hardware POS\Logs`
-- 导出：`%LOCALAPPDATA%\CNKH Hardware POS\Exports`
-- 收据：`%LOCALAPPDATA%\CNKH Hardware POS\Receipts`
-- 已存在且需要升级的数据库启动顺序：`integrity_check → SQLite online backup → 单一事务 migration → 正常开放写入`
-- 已经是最新 schema 的数据库不会在每次启动重复建立 pre-migration 备份。
-- migration 失败会 rollback 并阻止应用进入可写状态，原数据库与启动前备份都会保留。
-- 金额一律使用 integer cents/sen；数量使用十进制定点文字表示，避免二进制浮点误差。
-- V5 不删除 `hardware_pos.db`，也不包含 MyInvois、云端同步或多电脑服务器功能。
+详细图文：[docs/GITHUB_BUILD_AND_DOWNLOAD_CN.md](docs/GITHUB_BUILD_AND_DOWNLOAD_CN.md)
 
-## 开发人员启动
+### 数据落在哪
+
+| 用途 | 路径 |
+|------|------|
+| 数据库 | `%LOCALAPPDATA%\CNKH Hardware POS\Data\hardware_pos.db` |
+| 备份 | `...\Backups` |
+| 日志 | `...\Logs` |
+| 导出 | `...\Exports` |
+| 收据 PDF | `...\Receipts` |
+| 收款码等资源 | `...\Assets` |
+| 商品图 | 数据库旁 `product_images\`（与 SQLite 分离） |
+
+金额用整数分（sen）；升级库：`integrity_check → 备份 → migration`，失败会回滚并拦写入。
+
+---
+
+## PC 主要能力
+
+- **收银**：搜商品 / 扫码、挂单取单、现金 / 卡 / DuitNow QR / 赊账、找零、整单折扣（可审计）
+- **库存**：商品、分类、进货、盘点、低库存提醒
+- **客户 / 供应商**、报表、日结、审计日志
+- **打印**：Windows / USB 小票；条码标签硬件打印（手机端只做队列 / PNG 导出）
+- **备份恢复**（Windows 本机）
+- **局域网同步**：顶栏 **同步/配对** → 开服务出二维码，手机扫码即可
+
+---
+
+## 局域网配对（PC ↔ 手机，无云）
+
+1. PC 与手机连**同一 Wi‑Fi**（访客网隔离常连不上）
+2. PC 顶栏点 **同步/配对**，启动服务（默认端口 **8787**）
+3. 手机 AppBar 点 **扫码配对**，扫 PC 上的码  
+   - 码内容形如：`cnkh-sync:v1|{"baseUrl":"http://192.168.x.x:8787","token":"...","name":"CNKH-PC"}`
+4. 连接成功后：销售近实时互推；商品 / 客户等以 PC 拉取为主（持续增强双向）
+
+手动填 IP：手机 **设置 → LAN Sync → 高级**。  
+技术细节：[LAN_SYNC.md](https://github.com/tyz11234/CNKH_POS_Mobile_APK/blob/main/LAN_SYNC.md)（手机仓也可放副本）
+
+---
+
+## 和手机端分工
+
+| | PC | 手机 APK |
+|--|----|----------|
+| 主库 / 权威数据 | ✅ | 本地 SQLite 缓存 + 同步 |
+| 标签机硬件打印 | ✅ | ❌（导出 PNG / 打印队列） |
+| Windows 备份还原 | ✅ | ❌ |
+| 摄像头连续扫码 | USB 扫枪 | ✅ |
+| 蓝牙小票（可选） | — | 可选开启 |
+| 店名显示 | 设置 | 登录页 / 顶栏：**黄金发宝号** |
+
+功能对照表见手机仓 [MOBILE_PC_PARITY](https://github.com/tyz11234/CNKH_POS_Mobile_APK) 说明或仓库内 `MOBILE_PC_PARITY.md`。
+
+---
+
+## 开发者本地跑
 
 ```powershell
 py -3.12 -m venv .venv
@@ -49,27 +91,26 @@ python admin_launcher.py
 python staff_launcher.py
 ```
 
-运行测试与源码自检：
-
 ```powershell
 pytest -q
 python tools/source_self_test.py
 ```
 
-## 目录
+### 目录速览
 
-- `cnkh_pos/database`：连接、schema、事务 migration、安全 bootstrap
-- `cnkh_pos/services`：销售、进货、客户/供应商、备份、打印、报表与维护服务
-- `cnkh_pos/ui`：Admin、Staff、dialogs、复用 widgets 与 Design System
-- `resources`：QSS、SVG、Qt Resource Collection
-- `tests`：fresh/legacy database 与关键服务测试
-- `installer`：Inno Setup 脚本
-- `build`：必须提交到 GitHub 的 Admin / Staff PyInstaller spec
-- `.github/workflows`：Windows release gate
-- `docs`：架构、迁移和 UI 规范
+- `cnkh_pos/database` — 连接、schema、migration  
+- `cnkh_pos/services` — 销售、进货、打印、LAN sync、备份…  
+- `cnkh_pos/ui` — Admin / Staff / 对话框  
+- `resources` — QSS、图标  
+- `tests` / `installer` / `build` / `.github/workflows`
 
-## 发布门禁
+更多：[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/MIGRATIONS.md](docs/MIGRATIONS.md) · [docs/UI_DESIGN_SYSTEM.md](docs/UI_DESIGN_SYSTEM.md)
 
-Windows 可安装候选版必须通过数据库迁移、交易原子性、付款、库存、备份恢复、Admin/Staff GUI、真实鼠标操作、鼠标滚轮、100%/125%/150% DPI、两个 packaged EXE self-test、Setup 静默安装及安装后两个 self-test。任何关键步骤失败时 workflow 会停止，不会上传安装 Artifact。
+---
 
-详见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)、[docs/MIGRATIONS.md](docs/MIGRATIONS.md) 与 [docs/UI_DESIGN_SYSTEM.md](docs/UI_DESIGN_SYSTEM.md)。
+## 相关链接
+
+- 手机 APK 下载：[tyz11234/CNKH_POS_Mobile_APK](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases)
+- 当前移动配套开发分支常在 PR（如 `feat/mobile-sync-ereceipt-scan`）合入后进主线
+
+**安全提示：** 局域网 Token 勿发到公网；配对码有时效时请在期限内扫完。

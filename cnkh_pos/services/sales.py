@@ -56,6 +56,8 @@ class SalesService:
         cashier_id: int,
         customer_id: int | None = None,
         business_date: date | None = None,
+        settlement_total_cents: int | None = None,
+        deposit_method: str | None = None,
     ) -> SaleResult:
         if not lines:
             raise SaleError("cart is empty")
@@ -65,6 +67,11 @@ class SalesService:
         method = payment_method.upper()
         if method not in {"CASH", "CARD", "DUITNOW_QR", "CREDIT"}:
             raise SaleError("unsupported payment method")
+        tender = None
+        if deposit_method is not None and str(deposit_method).strip():
+            tender = str(deposit_method).strip().upper()
+            if tender not in {"CASH", "CARD", "DUITNOW_QR"}:
+                raise SaleError("unsupported deposit method")
         prepared: list[dict[str, object]] = []
         with self.database.transaction() as conn:
             subtotal = 0
@@ -105,7 +112,16 @@ class SalesService:
                         "net": net,
                     }
                 )
-            total = subtotal - total_discount
+            line_total = subtotal - total_discount
+            if settlement_total_cents is not None:
+                if method == "CREDIT":
+                    raise SaleError("credit sales cannot use settlement override")
+                settlement = int(settlement_total_cents)
+                if settlement < 0:
+                    raise SaleError("settlement total cannot be negative")
+            else:
+                settlement = line_total
+            total = settlement
             if method == "CREDIT":
                 if customer_id is None:
                     raise SaleError("credit sale requires a customer")
@@ -115,13 +131,20 @@ class SalesService:
                 ).fetchone()
                 if customer is None:
                     raise SaleError("credit customer is not available")
-                if paid_cents < 0 or paid_cents > total:
+                if paid_cents < 0 or paid_cents > line_total:
                     raise SaleError("invalid paid amount")
+                if paid_cents > 0:
+                    if tender is None:
+                        raise SaleError("credit deposit requires a tender method")
+                else:
+                    tender = None
                 change = 0
+                total = line_total
             else:
                 if paid_cents < total:
                     raise SaleError("paid amount is less than total")
                 change = paid_cents - total
+                tender = None
 
             sold_at = utc_now_text()
             receipt_no = next_receipt_number(conn, business_date or date.today())
@@ -129,8 +152,9 @@ class SalesService:
                 """
                 INSERT INTO sales(
                     receipt_no, subtotal_cents, discount_cents, total_cents,
-                    paid_cents, change_cents, payment_method, customer_id, cashier_id, sold_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    paid_cents, change_cents, payment_method, deposit_method,
+                    customer_id, cashier_id, sold_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     receipt_no,
@@ -140,6 +164,7 @@ class SalesService:
                     paid_cents,
                     change,
                     method,
+                    tender,
                     customer_id,
                     cashier_id,
                     sold_at,
@@ -209,6 +234,21 @@ class SalesService:
                         sold_at,
                     ),
                 )
+            if method != "CREDIT" and total != line_total:
+                AuditService.record(
+                    conn,
+                    action="ROUNDING",
+                    module="SALES",
+                    user_id=cashier_id,
+                    record_type="SALE",
+                    record_id=sale_id,
+                    old_value={"checkout_total_cents": line_total},
+                    new_value={
+                        "checkout_total_cents": total,
+                        "rounding_cents": total - line_total,
+                    },
+                    detail="CNKH checkout rounding applied after line totals",
+                )
             AuditService.record(
                 conn,
                 action="CREATE",
@@ -220,6 +260,7 @@ class SalesService:
                     "receipt_no": receipt_no,
                     "total_cents": total,
                     "payment_method": method,
+                    "deposit_method": tender,
                 },
             )
             return SaleResult(sale_id, receipt_no, total, paid_cents, change)
@@ -313,6 +354,7 @@ class ReturnService:
         reason: str,
         operator_id: int,
         refund_method: str = "ORIGINAL",
+        apply_checkout_rounding: bool = False,
     ) -> str:
         if not quantities_by_sale_item:
             raise SaleError("return has no items")
@@ -468,4 +510,66 @@ class ReturnService:
                     "refund_method": method,
                 },
             )
+            if apply_checkout_rounding and str(sale["payment_method"]) != "CREDIT":
+                items = conn.execute(
+                    "SELECT id,quantity_decimal FROM sale_items WHERE sale_id=?",
+                    (sale_id,),
+                ).fetchall()
+                fully_returned = True
+                for item in items:
+                    returned_qty = sum(
+                        (
+                            parse_quantity(row[0])
+                            for row in conn.execute(
+                                """SELECT sri.quantity_decimal FROM sale_return_items sri
+                                   JOIN sale_returns sr ON sr.id=sri.return_id
+                                   WHERE sr.sale_id=? AND sri.sale_item_id=?""",
+                                (sale_id, item["id"]),
+                            )
+                        ),
+                        Decimal("0"),
+                    )
+                    if returned_qty != parse_quantity(item["quantity_decimal"]):
+                        fully_returned = False
+                        break
+                if fully_returned:
+                    raw_total = int(sale["subtotal_cents"]) - int(sale["discount_cents"])
+                    sale_adjustment = int(sale["total_cents"]) - raw_total
+                    if sale_adjustment:
+                        allocated = 0
+                        returns = conn.execute(
+                            "SELECT id,total_cents FROM sale_returns WHERE sale_id=? ORDER BY id",
+                            (sale_id,),
+                        ).fetchall()
+                        for returned in returns:
+                            item_refund = int(
+                                conn.execute(
+                                    "SELECT COALESCE(SUM(refund_cents),0) FROM sale_return_items WHERE return_id=?",
+                                    (returned["id"],),
+                                ).fetchone()[0]
+                            )
+                            allocated += int(returned["total_cents"]) - item_refund
+                        remaining = sale_adjustment - allocated
+                        if remaining:
+                            adjusted_refund = total_refund + remaining
+                            if adjusted_refund < 0:
+                                raise SaleError("rounded refund cannot be negative")
+                            conn.execute(
+                                "UPDATE sale_returns SET total_cents=? WHERE id=?",
+                                (adjusted_refund, return_id),
+                            )
+                            AuditService.record(
+                                conn,
+                                action="ROUNDING",
+                                module="SALES",
+                                user_id=operator_id,
+                                record_type="SALE_RETURN",
+                                record_id=return_id,
+                                old_value={"refund_cents": total_refund},
+                                new_value={
+                                    "refund_cents": adjusted_refund,
+                                    "rounding_cents": remaining,
+                                },
+                                detail="Final full return includes original checkout rounding",
+                            )
             return number

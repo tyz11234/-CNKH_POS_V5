@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -23,6 +25,7 @@ class Sidebar(QFrame):
         *,
         display_name: str = "Admin",
         role_text: str = "管理员",
+        sync_callback: Callable[[], None] | None = None,
     ):
         super().__init__(parent)
         self.setObjectName("Sidebar")
@@ -74,5 +77,11 @@ class Sidebar(QFrame):
         labels.addWidget(name)
         labels.addWidget(role)
         user_layout.addWidget(avatar)
-        user_layout.addLayout(labels)
+        user_layout.addLayout(labels, 1)
         layout.addWidget(user)
+        if sync_callback is not None:
+            sync_btn = QPushButton("同步/配对")
+            sync_btn.setObjectName("SyncPairButton")
+            sync_btn.setToolTip("局域网同步 · 配对二维码")
+            sync_btn.clicked.connect(lambda: sync_callback())
+            layout.addWidget(sync_btn)

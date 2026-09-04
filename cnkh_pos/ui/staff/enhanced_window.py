@@ -3,12 +3,18 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 
+from cnkh_pos.config import AppPaths
 from cnkh_pos.services.checkout_rounding import RoundedSalesService
 from cnkh_pos.services.discounts import allocate_order_discount
+from cnkh_pos.services.lan_sync_server import (
+    publish_low_stock_events,
+    publish_sync_event,
+)
 from cnkh_pos.services.money import clamp_discount_cents, line_amount_cents
 from cnkh_pos.services.sales import SaleLine
 from cnkh_pos.ui.dialogs.checkout import SaleCompletedDialog
 from cnkh_pos.ui.dialogs.discount import DiscountDialog
+from cnkh_pos.ui.dialogs.e_receipt_dialog import send_e_receipt_for_sale
 from cnkh_pos.ui.dialogs.rounded_checkout import RoundedCheckoutDialog
 from cnkh_pos.ui.staff.window import StaffWindow as BaseStaffWindow
 
@@ -82,6 +88,8 @@ class StaffWindowEnhanced(BaseStaffWindow):
             self,
             customers=self._customers(),
             quick_settings_callback=self._open_quick_amount_settings,
+            paths=AppPaths.default(),
+            is_admin=self.user.role == "ADMIN",
         )
         can_discount = bool(self.user.permissions.get("apply_discount", False))
         dialog.checkout_discount_mode.setEnabled(can_discount)
@@ -92,6 +100,47 @@ class StaffWindowEnhanced(BaseStaffWindow):
             dialog.checkout_discount_value.setToolTip(message)
         if dialog.exec() != RoundedCheckoutDialog.DialogCode.Accepted:
             return
+        # Stock gate (settings stock_policy: warn|block)
+        try:
+            import json as _json
+            conn = self.database.connect(readonly=True)
+            pol_row = conn.execute(
+                "SELECT value_json FROM settings WHERE key='stock_policy'"
+            ).fetchone()
+            policy = "warn"
+            if pol_row and pol_row[0]:
+                try:
+                    policy = str(_json.loads(pol_row[0]))
+                except Exception:
+                    policy = str(pol_row[0]).strip('"') or "warn"
+            for product_id, quantity in self.cart_quantities.items():
+                row = conn.execute(
+                    "SELECT name, stock_decimal FROM products WHERE id=? AND is_deleted=0",
+                    (product_id,),
+                ).fetchone()
+                if row is None:
+                    continue
+                stock = float(row["stock_decimal"] or 0)
+                if float(quantity) > stock:
+                    if policy == "block":
+                        conn.close()
+                        QMessageBox.warning(
+                            self,
+                            "Stock",
+                            f"库存不足 / Insufficient: {row['name']} (有 {stock})",
+                        )
+                        return
+                    answer = QMessageBox.question(
+                        self,
+                        "Stock",
+                        f"库存不足：{row['name']}\n需要 {quantity} · 库存 {stock}\n仍结账？",
+                    )
+                    if answer != QMessageBox.StandardButton.Yes:
+                        conn.close()
+                        return
+            conn.close()
+        except Exception:
+            pass
         try:
             lines = self._sale_lines_with_order_discount(dialog.discount_cents)
             result = RoundedSalesService(self.database).create_sale(
@@ -100,6 +149,7 @@ class StaffWindowEnhanced(BaseStaffWindow):
                 paid_cents=dialog.paid_cents,
                 cashier_id=self.user.id,
                 customer_id=dialog.customer_id,
+                deposit_method=dialog.deposit_method,
             )
         except Exception as exc:
             QMessageBox.critical(self, "Checkout", str(exc))
@@ -112,7 +162,21 @@ class StaffWindowEnhanced(BaseStaffWindow):
             result.paid_cents,
             dialog.payment_method,
             self,
+            sale_id=result.sale_id,
+            database=self.database,
         )
         completed.exec()
         if completed.print_requested:
             self._print_sale(result.sale_id)
+        if completed.ereceipt_requested:
+            send_e_receipt_for_sale(self, self.database, result.sale_id)
+        try:
+            publish_sync_event(
+                "sale",
+                source="pc",
+                receipt_no=result.receipt_no,
+                sale_id=result.sale_id,
+            )
+            publish_low_stock_events(self.database)
+        except Exception:
+            pass

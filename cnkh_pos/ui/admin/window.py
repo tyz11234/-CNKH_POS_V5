@@ -25,7 +25,9 @@ from cnkh_pos.ui.admin.enhanced_data_pages import (
 )
 from cnkh_pos.ui.admin.settings_pages import DailyClosingPage, ReportsPage, SettingsPage
 from cnkh_pos.ui.admin.users_page import UsersPage
+from cnkh_pos.ui.dialogs.sync_pair_dialog import open_sync_pair_dialog
 from cnkh_pos.ui.widgets import Sidebar
+from cnkh_pos.ui.widgets.sync_toolbar import sync_event_bridge
 
 
 class AdminWindow(QMainWindow):
@@ -57,7 +59,10 @@ class AdminWindow(QMainWindow):
             ],
             display_name=user.display_name,
             role_text="管理员",
+            sync_callback=lambda: open_sync_pair_dialog(self, database),
         )
+        # Refresh sales page when phone pushes a sale
+        self._sales_page = None
         self.pages = QStackedWidget()
         self.page_keys: dict[str, int] = {}
         self._add_page("dashboard", DashboardPage(database))
@@ -69,7 +74,8 @@ class AdminWindow(QMainWindow):
         catalog_tabs.addTab(StocktakePage(database, user), "Stocktake / 盘点")
         catalog_tabs.addTab(BarcodeLabelsPage(database), "Barcode Labels / 条码标签")
         self._add_page("products", catalog_tabs)
-        self._add_page("sales", SalesPageEnhanced(database, user))
+        self._sales_page = SalesPageEnhanced(database, user)
+        self._add_page("sales", self._sales_page)
         self._add_page("purchases", PurchasesPage(database, user))
         self._add_page("customers", EntityPage(database, user, "customers"))
         self._add_page("suppliers", EntityPage(database, user, "suppliers"))
@@ -87,9 +93,21 @@ class AdminWindow(QMainWindow):
         layout.addWidget(sidebar)
         layout.addWidget(self.pages, 1)
         self.setCentralWidget(canvas)
+        sync_event_bridge().sale_event.connect(self._on_sync_event)
 
     def _add_page(self, key: str, page: QWidget) -> None:
         self.page_keys[key] = self.pages.addWidget(page)
 
     def _select_page(self, key: str) -> None:
         self.pages.setCurrentIndex(self.page_keys[key])
+
+    def _on_sync_event(self, event: dict) -> None:
+        """Refresh sales UI when phone pushes a sale over LAN sync."""
+        try:
+            page = self._sales_page
+            if page is not None and hasattr(page, "reload"):
+                page.reload()
+            elif page is not None and hasattr(page, "refresh"):
+                page.refresh()
+        except Exception:
+            pass
