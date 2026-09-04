@@ -7,6 +7,7 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
+from cnkh_pos.config import SCHEMA_VERSION
 from cnkh_pos.database.bootstrap import bootstrap_database
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthService
@@ -633,7 +634,7 @@ class Run8MigrationTests(unittest.TestCase):
             conn.close()
             result = bootstrap_database(database, backups)
             self.assertEqual(result.schema_before, 6)
-            self.assertEqual(result.schema_after, 7)
+            self.assertEqual(result.schema_after, SCHEMA_VERSION)
             self.assertIsNotNone(result.backup_path)
             self.assertEqual(len(list(backups.glob("*.db"))), 1)
             conn = sqlite3.connect(database)
@@ -643,6 +644,45 @@ class Run8MigrationTests(unittest.TestCase):
                         "SELECT name FROM sqlite_master WHERE type='table' AND name='supplier_products'"
                     ).fetchone()
                 )
+            finally:
+                conn.close()
+
+    def test_schema_seven_upgrade_adds_deposit_method(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            database = root / "hardware_pos.db"
+            backups = root / "backups"
+            bootstrap_database(database, backups)
+            conn = sqlite3.connect(database)
+            conn.execute("DELETE FROM schema_migrations WHERE version=8")
+            conn.execute("PRAGMA user_version=7")
+            # Simulate a pre-migration-8 CREDIT deposit without deposit_method.
+            conn.execute("DELETE FROM sales")
+            # Ensure column can be dropped only if present from fresh schema 8 —
+            # rebuild a schema-7-like row by recreating without the column when needed.
+            columns = [row[1] for row in conn.execute("PRAGMA table_info(sales)")]
+            if "deposit_method" in columns:
+                conn.execute("ALTER TABLE sales DROP COLUMN deposit_method")
+            conn.execute(
+                """INSERT INTO sales(
+                    receipt_no,subtotal_cents,discount_cents,total_cents,paid_cents,
+                    change_cents,payment_method,customer_id,cashier_id,sold_at,is_deleted
+                ) VALUES ('LEGACY-CREDIT',1000,0,1000,300,0,'CREDIT',NULL,NULL,datetime('now'),0)"""
+            )
+            conn.commit()
+            conn.close()
+            result = bootstrap_database(database, backups)
+            self.assertEqual(result.schema_before, 7)
+            self.assertEqual(result.schema_after, SCHEMA_VERSION)
+            conn = sqlite3.connect(database)
+            try:
+                columns = [row[1] for row in conn.execute("PRAGMA table_info(sales)")]
+                self.assertIn("deposit_method", columns)
+                row = conn.execute(
+                    "SELECT deposit_method,paid_cents FROM sales WHERE receipt_no='LEGACY-CREDIT'"
+                ).fetchone()
+                self.assertEqual(row[0], "CASH")
+                self.assertEqual(row[1], 300)
             finally:
                 conn.close()
 

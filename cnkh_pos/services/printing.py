@@ -11,12 +11,51 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.pdfgen.canvas import Canvas
 
+from cnkh_pos.config import RECEIPT_QR_IMAGE_NAME, AppPaths
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.money import format_myr
 
 WINDOWS_DEFAULT_PRINTER = "__WINDOWS_DEFAULT__"
 RECEIPT_TEXT_WIDTH = 40
 RECEIPT_PDF_CJK_FONT = "STSong-Light"
+RECEIPT_QR_SIZE_MM = 30.0
+
+
+def receipt_qr_enabled(settings: dict[str, object]) -> bool:
+    value = settings.get("qr_enabled", False)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
+def resolve_receipt_qr_path(
+    settings: dict[str, object], *, paths: AppPaths | None = None
+) -> Path | None:
+    """Return an existing QR image path when enabled in receipt settings."""
+    if not receipt_qr_enabled(settings):
+        return None
+    configured = str(settings.get("qr_image", "") or "").strip()
+    app_paths = paths or AppPaths.default()
+    candidates: list[Path] = []
+    if configured:
+        candidate = Path(configured)
+        if candidate.is_absolute():
+            candidates.append(candidate)
+        else:
+            candidates.append(app_paths.assets / candidate.name)
+            candidates.append(app_paths.data / candidate.name)
+    candidates.append(app_paths.assets / RECEIPT_QR_IMAGE_NAME)
+    candidates.append(app_paths.receipt_qr_image)
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path if path.is_absolute() else path
+        key = resolved.resolve() if resolved.exists() else resolved
+        if key in seen:
+            continue
+        seen.add(key)
+        if resolved.is_file() and resolved.stat().st_size > 0:
+            return resolved
+    return None
 
 
 def _character_width(character: str) -> int:
@@ -256,6 +295,8 @@ class PrintingService:
         )
         lines.extend(_centered_setting_lines(receipt.settings.get("footer", ""), width))
         lines.extend(_centered_setting_lines(receipt.settings.get("notes", ""), width))
+        if resolve_receipt_qr_path(receipt.settings) is not None:
+            lines.append(_center_display("[QR image attached]", width))
         return "\n".join(line for line in lines if line.strip())
 
     @staticmethod
@@ -335,6 +376,13 @@ class PrintingService:
             sections.append(f'<div class="center">{esc(footer)}</div>')
         if notes:
             sections.append(f'<div class="center">{esc(notes)}</div>')
+        qr_path = resolve_receipt_qr_path(receipt.settings)
+        if qr_path is not None:
+            uri = qr_path.resolve().as_uri()
+            sections.append(
+                f'<div class="center qr"><img src="{esc(uri)}" '
+                f'alt="Payment QR" style="width:30mm;height:30mm;"/></div>'
+            )
 
         body = "".join(sections)
         return f"""
@@ -358,15 +406,25 @@ table.total td {{ font-weight: 800; }}
     def render_pdf(self, receipt: Receipt, path: Path) -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         text = self.render_text(receipt)
+        # Drop the textual QR marker from PDF body; the image is drawn instead.
+        pdf_lines = [
+            line
+            for line in text.splitlines()
+            if "[QR image attached]" not in line
+        ]
+        qr_path = resolve_receipt_qr_path(receipt.settings)
         line_height = 4.2 * mm
-        height = max(120 * mm, (text.count("\n") + 5) * line_height)
+        qr_block = (RECEIPT_QR_SIZE_MM + 8) * mm if qr_path is not None else 0
+        height = max(
+            120 * mm, (len(pdf_lines) + 5) * line_height + qr_block
+        )
         try:
             pdfmetrics.getFont(RECEIPT_PDF_CJK_FONT)
         except KeyError:
             pdfmetrics.registerFont(UnicodeCIDFont(RECEIPT_PDF_CJK_FONT))
         canvas = Canvas(str(path), pagesize=(80 * mm, height))
         y = height - 8 * mm
-        for line in text.splitlines():
+        for line in pdf_lines:
             font_name = (
                 RECEIPT_PDF_CJK_FONT
                 if any(ord(character) > 127 for character in line)
@@ -375,6 +433,19 @@ table.total td {{ font-weight: 800; }}
             canvas.setFont(font_name, 7.5)
             canvas.drawString(4 * mm, y, line)
             y -= line_height
+        if qr_path is not None:
+            size = RECEIPT_QR_SIZE_MM * mm
+            x = (80 * mm - size) / 2.0
+            y = max(4 * mm, y - size)
+            canvas.drawImage(
+                str(qr_path),
+                x,
+                y,
+                width=size,
+                height=size,
+                preserveAspectRatio=True,
+                mask="auto",
+            )
         canvas.save()
         return path
 

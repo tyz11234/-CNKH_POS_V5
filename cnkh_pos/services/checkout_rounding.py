@@ -61,6 +61,7 @@ class RoundedSalesService(SalesService):
         cashier_id: int,
         customer_id: int | None = None,
         business_date=None,
+        deposit_method: str | None = None,
     ) -> SaleResult:
         method = payment_method.upper()
         raw_total = _raw_total(self.database, lines)
@@ -82,6 +83,7 @@ class RoundedSalesService(SalesService):
             settlement_total_cents=(
                 None if method == "CREDIT" else settlement_total
             ),
+            deposit_method=deposit_method,
         )
 
 

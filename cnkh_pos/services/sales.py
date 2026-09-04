@@ -57,6 +57,7 @@ class SalesService:
         customer_id: int | None = None,
         business_date: date | None = None,
         settlement_total_cents: int | None = None,
+        deposit_method: str | None = None,
     ) -> SaleResult:
         if not lines:
             raise SaleError("cart is empty")
@@ -66,6 +67,11 @@ class SalesService:
         method = payment_method.upper()
         if method not in {"CASH", "CARD", "DUITNOW_QR", "CREDIT"}:
             raise SaleError("unsupported payment method")
+        tender = None
+        if deposit_method is not None and str(deposit_method).strip():
+            tender = str(deposit_method).strip().upper()
+            if tender not in {"CASH", "CARD", "DUITNOW_QR"}:
+                raise SaleError("unsupported deposit method")
         prepared: list[dict[str, object]] = []
         with self.database.transaction() as conn:
             subtotal = 0
@@ -127,12 +133,18 @@ class SalesService:
                     raise SaleError("credit customer is not available")
                 if paid_cents < 0 or paid_cents > line_total:
                     raise SaleError("invalid paid amount")
+                if paid_cents > 0:
+                    if tender is None:
+                        raise SaleError("credit deposit requires a tender method")
+                else:
+                    tender = None
                 change = 0
                 total = line_total
             else:
                 if paid_cents < total:
                     raise SaleError("paid amount is less than total")
                 change = paid_cents - total
+                tender = None
 
             sold_at = utc_now_text()
             receipt_no = next_receipt_number(conn, business_date or date.today())
@@ -140,8 +152,9 @@ class SalesService:
                 """
                 INSERT INTO sales(
                     receipt_no, subtotal_cents, discount_cents, total_cents,
-                    paid_cents, change_cents, payment_method, customer_id, cashier_id, sold_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    paid_cents, change_cents, payment_method, deposit_method,
+                    customer_id, cashier_id, sold_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     receipt_no,
@@ -151,6 +164,7 @@ class SalesService:
                     paid_cents,
                     change,
                     method,
+                    tender,
                     customer_id,
                     cashier_id,
                     sold_at,
@@ -246,6 +260,7 @@ class SalesService:
                     "receipt_no": receipt_no,
                     "total_cents": total,
                     "payment_method": method,
+                    "deposit_method": tender,
                 },
             )
             return SaleResult(sale_id, receipt_no, total, paid_cents, change)

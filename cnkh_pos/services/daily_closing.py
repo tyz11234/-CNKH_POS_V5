@@ -31,13 +31,18 @@ class DailyClosingService:
                 (day,),
             ).fetchone()[0]
         )
-        # Credit down-payments are not tagged with a tender type; treat them as
-        # cash-in-drawer so partial CREDIT deposits are not silently lost.
+        # Only CASH Credit deposits (or legacy NULL, treated as CASH) inflate the
+        # drawer. CARD / DUITNOW_QR deposits stay out of system cash.
         credit_deposits = int(
             conn.execute(
                 """SELECT COALESCE(SUM(paid_cents),0) FROM sales
                    WHERE payment_method='CREDIT' AND is_deleted=0
-                   AND paid_cents > 0 AND substr(sold_at,1,10)=?""",
+                   AND paid_cents > 0 AND substr(sold_at,1,10)=?
+                   AND (
+                       deposit_method IS NULL
+                       OR TRIM(deposit_method)=''
+                       OR upper(deposit_method)='CASH'
+                   )""",
                 (day,),
             ).fetchone()[0]
         )
