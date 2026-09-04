@@ -7,7 +7,7 @@ from pathlib import Path
 from cnkh_pos import __version__
 
 APP_NAME = "CNKH Hardware POS"
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def _local_app_data() -> Path:
@@ -16,6 +16,9 @@ def _local_app_data() -> Path:
         return Path(value)
     # Non-Windows fallback is used only for development and tests.
     return Path.home() / ".local" / "share"
+
+
+RECEIPT_QR_IMAGE_NAME = "receipt_qr.png"
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,6 +30,7 @@ class AppPaths:
     logs: Path
     exports: Path
     receipts: Path
+    assets: Path
 
     @classmethod
     def default(cls) -> AppPaths:
@@ -39,7 +43,12 @@ class AppPaths:
             logs=root / "Logs",
             exports=root / "Exports",
             receipts=root / "Receipts",
+            assets=root / "Assets",
         )
+
+    @property
+    def receipt_qr_image(self) -> Path:
+        return self.assets / RECEIPT_QR_IMAGE_NAME
 
     def ensure_directories(self) -> None:
         for folder in (
@@ -49,6 +58,7 @@ class AppPaths:
             self.logs,
             self.exports,
             self.receipts,
+            self.assets,
         ):
             folder.mkdir(parents=True, exist_ok=True)
 

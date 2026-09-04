@@ -100,6 +100,7 @@ class StaffWindowEnhanced(BaseStaffWindow):
                 paid_cents=dialog.paid_cents,
                 cashier_id=self.user.id,
                 customer_id=dialog.customer_id,
+                deposit_method=dialog.deposit_method,
             )
         except Exception as exc:
             QMessageBox.critical(self, "Checkout", str(exc))

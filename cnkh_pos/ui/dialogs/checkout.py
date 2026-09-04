@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from cnkh_pos.services.money import format_myr, rm_to_cents
@@ -32,6 +33,7 @@ class CheckoutDialog(QDialog):
         self.total_cents = total_cents
         self.paid_cents = 0
         self.payment_method = "CASH"
+        self.deposit_method: str | None = None
         self.customer_id: int | None = None
         self.setWindowTitle("结账 / 收款")
         self.setModal(True)
@@ -90,6 +92,33 @@ class CheckoutDialog(QDialog):
         self.customer.hide()
         root.addWidget(self.customer_caption)
         root.addWidget(self.customer)
+
+        self.deposit_caption = self._caption("定金付款方式 / Deposit Method")
+        self.deposit_caption.hide()
+        root.addWidget(self.deposit_caption)
+        deposit_row = QHBoxLayout()
+        self.deposit_group = QButtonGroup(self)
+        self.deposit_group.setExclusive(True)
+        for index, (label, value) in enumerate(
+            (
+                ("Cash", "CASH"),
+                ("Card", "CARD"),
+                ("DuitNow QR", "DUITNOW_QR"),
+            )
+        ):
+            button = QPushButton(label)
+            button.setObjectName(f"DepositMethod{value}")
+            button.setCheckable(True)
+            button.setProperty("depositMethod", value)
+            self.deposit_group.addButton(button)
+            deposit_row.addWidget(button)
+            if index == 0:
+                button.setChecked(True)
+        self.deposit_buttons_host = QWidget()
+        self.deposit_buttons_host.setLayout(deposit_row)
+        self.deposit_buttons_host.hide()
+        root.addWidget(self.deposit_buttons_host)
+        self.paid_input.textChanged.connect(self._refresh_deposit_visibility)
         self.method_group.buttonToggled.connect(self._method_changed)
 
         quick_header = QHBoxLayout()
@@ -159,6 +188,29 @@ class CheckoutDialog(QDialog):
             self._set_paid(self.total_cents)
         elif is_credit:
             self.paid_input.setText("0.00")
+        self._refresh_deposit_visibility()
+
+    def _refresh_deposit_visibility(self, *_args) -> None:
+        selected = self.method_group.checkedButton()
+        method = (
+            str(selected.property("paymentMethod")) if selected else "CASH"
+        )
+        show = False
+        if method == "CREDIT":
+            cleaned = (
+                self.paid_input.text()
+                .upper()
+                .replace("RM", "")
+                .replace(",", "")
+                .strip()
+            )
+            try:
+                paid = rm_to_cents(cleaned or "0")
+            except ValueError:
+                paid = 0
+            show = paid > 0
+        self.deposit_caption.setVisible(show)
+        self.deposit_buttons_host.setVisible(show)
 
     def _update_change(self, value: str) -> None:
         cleaned = value.upper().replace("RM", "").replace(",", "").strip()
@@ -199,6 +251,14 @@ class CheckoutDialog(QDialog):
             self.paid_input.setStyleSheet("border:2px solid #E5484D;")
             self.paid_input.setFocus()
             return
+        self.deposit_method = None
+        if self.payment_method == "CREDIT" and self.paid_cents > 0:
+            deposit_button = self.deposit_group.checkedButton()
+            if deposit_button is None:
+                self.deposit_buttons_host.setStyleSheet("border:2px solid #E5484D;")
+                return
+            self.deposit_method = str(deposit_button.property("depositMethod"))
+            self.deposit_buttons_host.setStyleSheet("")
         self.accept()
 
 

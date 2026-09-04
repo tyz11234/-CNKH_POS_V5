@@ -97,6 +97,9 @@ CORE_SCHEMA: tuple[str, ...] = (
         paid_cents INTEGER NOT NULL CHECK(paid_cents >= 0),
         change_cents INTEGER NOT NULL DEFAULT 0 CHECK(change_cents >= 0),
         payment_method TEXT NOT NULL CHECK(payment_method IN ('CASH','CARD','DUITNOW_QR','CREDIT')),
+        deposit_method TEXT CHECK(
+            deposit_method IS NULL OR deposit_method IN ('CASH','CARD','DUITNOW_QR')
+        ),
         customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
         cashier_id INTEGER REFERENCES users(id),
         sold_at TEXT NOT NULL,

@@ -1395,12 +1395,23 @@ class MaintenancePage(QWidget):
         )
 
     def backup(self) -> None:
-        service = BackupService(AppPaths.default().backups)
-        result = service.create(
-            self.database.path, reason="manual"
+        try:
+            service = BackupService(AppPaths.default().backups)
+            result = service.create(self.database.path, reason="manual")
+            service.prune(keep=30)
+        except Exception as exc:
+            QMessageBox.warning(
+                self,
+                "Backup",
+                "Backup failed / 备份失败: "
+                f"{exc}\nActive database was not changed / 当前数据库未改动。",
+            )
+            return
+        QMessageBox.information(
+            self,
+            "Backup",
+            f"Backup created / 备份已建立:\n{result.path}",
         )
-        service.prune(keep=30)
-        QMessageBox.information(self, "Backup", str(result.path))
 
     def restore(self) -> None:
         backup_path, _ = QFileDialog.getOpenFileName(
@@ -1429,11 +1440,20 @@ class MaintenancePage(QWidget):
                 password=password,
             )
         except Exception as exc:
-            QMessageBox.warning(self, "Restore", str(exc))
+            QMessageBox.warning(
+                self,
+                "Restore",
+                f"{exc}\n"
+                "If a safety backup was created it remains in the Backups folder / "
+                "若已建立安全备份，仍保留在 Backups 文件夹。",
+            )
             return
         self.refresh()
         QMessageBox.information(
-            self, "Restore", f"恢复成功。替换前安全备份：{safety}"
+            self,
+            "Restore",
+            "Restore succeeded / 恢复成功。\n"
+            f"Pre-restore safety backup kept / 替换前安全备份已保留:\n{safety}",
         )
 
     def open_log_folder(self) -> None:

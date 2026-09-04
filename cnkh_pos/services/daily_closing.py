@@ -31,6 +31,21 @@ class DailyClosingService:
                 (day,),
             ).fetchone()[0]
         )
+        # Only CASH Credit deposits (or legacy NULL, treated as CASH) inflate the
+        # drawer. CARD / DUITNOW_QR deposits stay out of system cash.
+        credit_deposits = int(
+            conn.execute(
+                """SELECT COALESCE(SUM(paid_cents),0) FROM sales
+                   WHERE payment_method='CREDIT' AND is_deleted=0
+                   AND paid_cents > 0 AND substr(sold_at,1,10)=?
+                   AND (
+                       deposit_method IS NULL
+                       OR TRIM(deposit_method)=''
+                       OR upper(deposit_method)='CASH'
+                   )""",
+                (day,),
+            ).fetchone()[0]
+        )
         customer_receipts = int(
             conn.execute(
                 """SELECT COALESCE(SUM(amount_cents),0) FROM customer_payments
@@ -53,7 +68,7 @@ class DailyClosingService:
                 (day,),
             ).fetchone()[0]
         )
-        return cash_sales + customer_receipts - supplier_payments - cash_returns
+        return cash_sales + credit_deposits + customer_receipts - supplier_payments - cash_returns
 
     def system_cash(self, *, business_date: date, opening_cash_cents: int = 0) -> int:
         if opening_cash_cents < 0:
