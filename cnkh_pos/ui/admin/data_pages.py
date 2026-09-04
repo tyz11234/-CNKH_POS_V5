@@ -34,10 +34,14 @@ from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.backup import BackupService
 from cnkh_pos.services.catalog import CatalogService, ProductInput
+from cnkh_pos.services.e_receipt import (
+    clear_e_receipt_cache,
+    count_e_receipt_cache,
+    e_receipt_cache_dir,
+)
 from cnkh_pos.services.entities import EntityInput, EntityService
 from cnkh_pos.services.excel_import import ExcelImportService
 from cnkh_pos.services.maintenance import AuditMaintenanceService
-from cnkh_pos.services.e_receipt import clear_e_receipt_cache, count_e_receipt_cache, e_receipt_cache_dir
 from cnkh_pos.services.money import rm_to_cents
 from cnkh_pos.services.payments import CustomerPaymentService, SupplierPaymentService
 from cnkh_pos.services.printing import PrintingService

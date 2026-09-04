@@ -442,13 +442,13 @@ class ReceiptSettingsWidget(QWidget):
         header.extend(_centered_setting_lines(self.phone.text(), width))
         body = [
             "-" * width,
-            f"Receipt: CNKH20260809-001",
+            "Receipt: CNKH20260809-001",
             "Cashier: Admin",
             "-" * width,
             "PVC Pipe 20mm",
-            f"  1 pcs x RM 9.00".ljust(width - 8) + "RM 9.00",
+            "  1 pcs x RM 9.00".ljust(width - 8) + "RM 9.00",
             "Hammer 2lb",
-            f"  1 pcs x RM 15.90".ljust(width - 9) + "RM 15.90",
+            "  1 pcs x RM 15.90".ljust(width - 9) + "RM 15.90",
             "-" * width,
             ("TOTAL").ljust(width - 9) + "RM 24.90",
             "-" * width,
