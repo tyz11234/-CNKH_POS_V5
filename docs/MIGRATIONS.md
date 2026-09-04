@@ -10,12 +10,17 @@
 4. 写入 `schema_migrations` 和 `PRAGMA user_version` 后，在提交前/启动门禁中验证必需表、必需列与 `PRAGMA foreign_key_check`；不能只相信 `user_version`。
 5. 任一步失败即 rollback，抛出 `DatabaseStartupError`，应用不得进入可写 UI。
 
-目标 schema 为 **7**。Migration 7 新增：
+目标 schema 为 **8**。Migration 7 新增：
 
 - `supplier_products`：供应商与商品多对多目录。
 - `daily_cash_closings.opening_cash_cents`：开档现金。
 - `sale_returns.refund_method`：Cash/Card/DuitNow/Credit adjustment 退款方式。
 - `5.0.0-alpha.4` 应用版本记录。
+
+Migration 8 新增：
+
+- `sales.deposit_method`：Credit 定金付款方式（`CASH` / `CARD` / `DUITNOW_QR`，可空）。
+- 既有 `payment_method='CREDIT' AND paid_cents>0` 行回填 `deposit_method='CASH'`（与旧日结口径一致）。
 
 `pre_migration` 与其他备份统一只保留最近 30 份。最新 schema 再次启动不会重复产生 migration 备份。
 
@@ -32,7 +37,7 @@ V5 检测旧表的实际列，而不假设某个 V4 schema。金额来源优先�
 
 ## Version policy
 
-Migration 只可向前、不可静默降级。应用版本低于数据库 schema 时拒绝启动。每个 migration 都必须有 old-schema fixture 测试。当前自动测试覆盖 fresh schema 7、schema 6→7，以及已是 schema 7 时不重复备份；未由 fixture 覆盖的未知 V4 变体不能宣称已兼容。
+Migration 只可向前、不可静默降级。应用版本低于数据库 schema 时拒绝启动。每个 migration 都必须有 old-schema fixture 测试。当前自动测试覆盖 fresh schema 8、schema 7→8 / 6→8，以及已是最新 schema 时不重复备份；未由 fixture 覆盖的未知 V4 变体不能宣称已兼容。
 ## Backup integrity
 
 SQLite backup API 完成复制后，目标备份必须重新执行 `PRAGMA integrity_check` 并得到唯一结果 `ok`。任何 integrity 失败都会删除刚生成的目标文件并抛出错误，避免把损坏副本当作可恢复备份。

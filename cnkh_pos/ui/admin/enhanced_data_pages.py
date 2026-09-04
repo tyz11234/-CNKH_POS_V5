@@ -8,6 +8,7 @@ from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.catalog import CatalogService, ProductInput
 from cnkh_pos.services.checkout_rounding import RoundedReturnService
+from cnkh_pos.ui.dialogs.e_receipt_dialog import send_e_receipt_for_sale
 from cnkh_pos.services.sales import SalesService
 from cnkh_pos.ui.admin.data_pages import (
     ProductDialog,
@@ -90,7 +91,15 @@ class SalesPageEnhanced(SalesPage):
 
     def __init__(self, database: Database, user: AuthenticatedUser):
         super().__init__(database, user)
+        self.add_action("电子收据 / WhatsApp", self.send_ereceipt, style="PrimaryButton")
         self.add_action("删除销售记录", self.delete_sale, style="DangerButton")
+
+    def send_ereceipt(self) -> None:
+        sale_id = self.selected_id()
+        if sale_id is None:
+            QMessageBox.information(self, "E-receipt", "请先选择销售记录。")
+            return
+        send_e_receipt_for_sale(self, self.database, sale_id)
 
     def return_sale(self) -> None:
         sale_id = self.selected_id()

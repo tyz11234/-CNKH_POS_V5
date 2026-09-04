@@ -33,6 +33,7 @@ Windows 离线 POS + Inventory 系统。V5 使用 **Python 3.12、PySide6 / Qt 6
 - 日志：`%LOCALAPPDATA%\CNKH Hardware POS\Logs`
 - 导出：`%LOCALAPPDATA%\CNKH Hardware POS\Exports`
 - 收据：`%LOCALAPPDATA%\CNKH Hardware POS\Receipts`
+- 资源（收据 QR 等）：`%LOCALAPPDATA%\CNKH Hardware POS\Assets`
 - 已存在且需要升级的数据库启动顺序：`integrity_check → SQLite online backup → 单一事务 migration → 正常开放写入`
 - 已经是最新 schema 的数据库不会在每次启动重复建立 pre-migration 备份。
 - migration 失败会 rollback 并阻止应用进入可写状态，原数据库与启动前备份都会保留。
