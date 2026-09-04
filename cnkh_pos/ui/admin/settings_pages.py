@@ -300,27 +300,37 @@ class ReceiptSettingsWidget(QWidget):
             if hasattr(widget, "textChanged"):
                 widget.textChanged.connect(self.update_preview)
 
-        self.qr_enabled = QCheckBox("在收据打印付款 QR 图 / Print payment QR on receipt")
+        qr_section = QLabel("DuitNow 收款码（仅管理员可改） / DuitNow QR (Admin only)")
+        qr_section.setObjectName("SectionTitle")
+        qr_section.setWordWrap(True)
+        form.addRow(qr_section)
+        self.qr_enabled = QCheckBox(
+            "在收据打印 DuitNow 收款码 / Print DuitNow QR on receipt"
+        )
+        self.qr_enabled.setObjectName("ReceiptQrEnabled")
         self.qr_enabled.stateChanged.connect(self.update_preview)
-        form.addRow("Payment QR", self.qr_enabled)
+        form.addRow("收据打印 / Print", self.qr_enabled)
         qr_row = QHBoxLayout()
         upload_qr = QPushButton("上传 / 替换 QR")
-        upload_qr.setObjectName("PrimaryButton")
+        upload_qr.setObjectName("ReceiptQrUploadButton")
+        upload_qr.setProperty("acceptanceName", "ReceiptQrUploadButton")
         upload_qr.clicked.connect(self.upload_qr)
         clear_qr = QPushButton("清除 QR")
-        clear_qr.setObjectName("DangerButton")
+        clear_qr.setObjectName("ReceiptQrClearButton")
+        clear_qr.setProperty("acceptanceName", "ReceiptQrClearButton")
         clear_qr.clicked.connect(self.clear_qr)
         qr_row.addWidget(upload_qr)
         qr_row.addWidget(clear_qr)
-        form.addRow("", qr_row)
+        form.addRow("管理（仅管理员）", qr_row)
         self.qr_preview = QLabel("No QR image")
+        self.qr_preview.setObjectName("ReceiptQrPreview")
         self.qr_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.qr_preview.setFixedSize(120, 120)
         self.qr_preview.setStyleSheet(
             "background:#F7FAFC; border:1px solid #DCE3EC; color:#5B6B7C;"
         )
         self.qr_preview.setScaledContents(False)
-        form.addRow("QR Preview", self.qr_preview)
+        form.addRow("预览 / Preview", self.qr_preview)
         self._qr_source_path: str | None = None
 
         save = QPushButton("保存 Receipt Settings")
@@ -519,7 +529,7 @@ class ReceiptSettingsWidget(QWidget):
     def upload_qr(self) -> None:
         selected, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Payment QR Image",
+            "Select DuitNow Payment QR Image / 选择 DuitNow 收款码",
             "",
             "Images (*.png *.jpg *.jpeg);;PNG (*.png);;JPEG (*.jpg *.jpeg)",
             options=QFileDialog.Option.DontUseNativeDialog,

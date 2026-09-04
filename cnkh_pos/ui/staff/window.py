@@ -366,6 +366,8 @@ class StaffWindow(QMainWindow):
             self,
             customers=self._customers(),
             quick_settings_callback=self._open_quick_amount_settings,
+            paths=AppPaths.default(),
+            is_admin=self.user.role == "ADMIN",
         )
         if dialog.exec() != CheckoutDialog.DialogCode.Accepted:
             return

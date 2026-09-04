@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -10,11 +13,18 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from cnkh_pos.config import AppPaths
 from cnkh_pos.services.money import format_myr, rm_to_cents
+from cnkh_pos.services.printing import resolve_checkout_qr_path
+
+CHECKOUT_QR_PREVIEW_SIZE = 220
+STAFF_MISSING_QR_MESSAGE = "尚未设置 DuitNow 收款码，请管理员在设置中上传"
+ADMIN_MISSING_QR_HINT = "尚未设置 DuitNow 收款码 → 请到「收据设置 / Receipt Settings」上传"
 
 
 class CheckoutDialog(QDialog):
@@ -28,6 +38,8 @@ class CheckoutDialog(QDialog):
         *,
         customers: list[tuple[int, str]] | None = None,
         quick_settings_callback=None,
+        paths: AppPaths | Path | None = None,
+        is_admin: bool = False,
     ):
         super().__init__(parent)
         self.total_cents = total_cents
@@ -35,10 +47,12 @@ class CheckoutDialog(QDialog):
         self.payment_method = "CASH"
         self.deposit_method: str | None = None
         self.customer_id: int | None = None
+        self._paths = self._normalize_paths(paths)
+        self._is_admin = bool(is_admin)
         self.setWindowTitle("结账 / 收款")
         self.setModal(True)
         self.setMinimumSize(430, 620)
-        self.resize(470, 660)
+        self.resize(470, 720)
         root = QVBoxLayout(self)
         root.setContentsMargins(28, 24, 28, 24)
         root.setSpacing(12)
@@ -120,6 +134,9 @@ class CheckoutDialog(QDialog):
         root.addWidget(self.deposit_buttons_host)
         self.paid_input.textChanged.connect(self._refresh_deposit_visibility)
         self.method_group.buttonToggled.connect(self._method_changed)
+        self.deposit_group.buttonToggled.connect(self._deposit_changed)
+
+        root.addWidget(self._build_duitnow_qr_panel())
 
         quick_header = QHBoxLayout()
         quick_header.addWidget(self._caption("快捷金额"))
@@ -167,6 +184,119 @@ class CheckoutDialog(QDialog):
         actions.addWidget(cancel)
         actions.addWidget(confirm, 2)
         root.addLayout(actions)
+        self._refresh_duitnow_qr_panel()
+
+    @staticmethod
+    def _normalize_paths(paths: AppPaths | Path | None) -> AppPaths:
+        if paths is None:
+            return AppPaths.default()
+        if isinstance(paths, AppPaths):
+            return paths
+        # Resolved assets Path or Assets folder Path.
+        path = Path(paths)
+        if path.name.lower() in {"receipt_qr.png", "receipt_qr.jpg"}:
+            assets = path.parent
+            root = assets.parent
+        elif path.name == "Assets":
+            assets = path
+            root = assets.parent
+        else:
+            # Treat as AppPaths.root
+            root = path
+            assets = root / "Assets"
+        return AppPaths(
+            root=root,
+            data=root / "Data",
+            database=root / "Data" / "hardware_pos.db",
+            backups=root / "Backups",
+            logs=root / "Logs",
+            exports=root / "Exports",
+            receipts=root / "Receipts",
+            assets=assets,
+        )
+
+    def _build_duitnow_qr_panel(self) -> QWidget:
+        panel = QWidget()
+        panel.setObjectName("CheckoutDuitNowQrPanel")
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(8)
+        caption = self._caption("DuitNow 收款码 / Payment QR")
+        caption.setObjectName("CheckoutDuitNowQrCaption")
+        layout.addWidget(caption)
+        preview = QLabel()
+        preview.setObjectName("CheckoutDuitNowQrPreview")
+        preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview.setFixedSize(CHECKOUT_QR_PREVIEW_SIZE, CHECKOUT_QR_PREVIEW_SIZE)
+        preview.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        preview.setStyleSheet(
+            "background:#F7FAFC; border:1px solid #DCE3EC; border-radius:12px;"
+        )
+        preview.setScaledContents(False)
+        layout.addWidget(preview, 0, Qt.AlignmentFlag.AlignHCenter)
+        message = QLabel()
+        message.setObjectName("CheckoutDuitNowQrMessage")
+        message.setWordWrap(True)
+        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        message.setStyleSheet("color:#5B6B7C; font-size:13px;")
+        layout.addWidget(message)
+        panel.hide()
+        self.duitnow_qr_panel = panel
+        self.duitnow_qr_preview = preview
+        self.duitnow_qr_message = message
+        return panel
+
+    def _duitnow_qr_should_show(self) -> bool:
+        selected = self.method_group.checkedButton()
+        method = (
+            str(selected.property("paymentMethod")) if selected else "CASH"
+        )
+        if method == "DUITNOW_QR":
+            return True
+        if method == "CREDIT" and not self.deposit_buttons_host.isHidden():
+            deposit = self.deposit_group.checkedButton()
+            if deposit is not None and str(deposit.property("depositMethod")) == (
+                "DUITNOW_QR"
+            ):
+                return True
+        return False
+
+    def _refresh_duitnow_qr_panel(self) -> None:
+        show = self._duitnow_qr_should_show()
+        self.duitnow_qr_panel.setVisible(show)
+        if not show:
+            return
+        qr_path = resolve_checkout_qr_path(paths=self._paths)
+        if qr_path is not None:
+            pixmap = QPixmap(str(qr_path))
+            if not pixmap.isNull():
+                self.duitnow_qr_preview.setText("")
+                self.duitnow_qr_preview.setPixmap(
+                    pixmap.scaled(
+                        self.duitnow_qr_preview.size(),
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+                self.duitnow_qr_preview.show()
+                self.duitnow_qr_message.hide()
+                return
+        self.duitnow_qr_preview.setPixmap(QPixmap())
+        self.duitnow_qr_preview.setText("")
+        self.duitnow_qr_preview.hide()
+        if self._is_admin:
+            self.duitnow_qr_message.setText(ADMIN_MISSING_QR_HINT)
+            self.duitnow_qr_message.setStyleSheet(
+                "color:#0B6BCB; font-size:13px; text-decoration:underline;"
+            )
+        else:
+            self.duitnow_qr_message.setText(STAFF_MISSING_QR_MESSAGE)
+            self.duitnow_qr_message.setStyleSheet(
+                "color:#B54708; font-size:13px; font-weight:600;"
+            )
+        self.duitnow_qr_message.show()
 
     @staticmethod
     def _caption(text: str) -> QLabel:
@@ -189,6 +319,12 @@ class CheckoutDialog(QDialog):
         elif is_credit:
             self.paid_input.setText("0.00")
         self._refresh_deposit_visibility()
+        self._refresh_duitnow_qr_panel()
+
+    def _deposit_changed(self, button: QPushButton, checked: bool) -> None:
+        if not checked:
+            return
+        self._refresh_duitnow_qr_panel()
 
     def _refresh_deposit_visibility(self, *_args) -> None:
         selected = self.method_group.checkedButton()
@@ -211,6 +347,7 @@ class CheckoutDialog(QDialog):
             show = paid > 0
         self.deposit_caption.setVisible(show)
         self.deposit_buttons_host.setVisible(show)
+        self._refresh_duitnow_qr_panel()
 
     def _update_change(self, value: str) -> None:
         cleaned = value.upper().replace("RM", "").replace(",", "").strip()

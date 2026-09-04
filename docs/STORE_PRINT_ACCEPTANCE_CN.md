@@ -6,7 +6,7 @@
 
 - [ ] 已安装当前 Windows Release Gate 产物（Admin + Staff）。
 - [ ] Admin → Receipt Settings 已选择 **Windows 默认** 或指定 80mm 热敏打印机。
-- [ ] （可选）已上传付款 QR 图并勾选打印 QR；预览可见缩略图。
+- [ ] （可选）Admin 收据设置已上传 DuitNow 收款码（仅管理员可改）；预览可见缩略图；可勾选是否打印。
 - [ ] 条码标签打印机已装纸：`50mm × 30mm`。
 
 ## 80mm 收据
@@ -21,6 +21,7 @@
 ## Credit 定金与日结（打印相关旁证）
 
 - [ ] Credit + 定金选 CASH / CARD / DUITNOW_QR 均可结账。
+- [ ] 结账选 DUITNOW_QR（或 Credit 定金 DUITNOW_QR）时，对话框大图显示店内收款码；未上传时 Staff 见「尚未设置…」提示。
 - [ ] 日结「系统应有」只含 CASH 定金与现金销售，不含 CARD/QR 定金。
 
 ## 50×30 条码标签

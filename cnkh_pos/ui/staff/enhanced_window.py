@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 
+from cnkh_pos.config import AppPaths
 from cnkh_pos.services.checkout_rounding import RoundedSalesService
 from cnkh_pos.services.discounts import allocate_order_discount
 from cnkh_pos.services.money import clamp_discount_cents, line_amount_cents
@@ -82,6 +83,8 @@ class StaffWindowEnhanced(BaseStaffWindow):
             self,
             customers=self._customers(),
             quick_settings_callback=self._open_quick_amount_settings,
+            paths=AppPaths.default(),
+            is_admin=self.user.role == "ADMIN",
         )
         can_discount = bool(self.user.permissions.get("apply_discount", False))
         dialog.checkout_discount_mode.setEnabled(can_discount)

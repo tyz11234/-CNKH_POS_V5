@@ -18,9 +18,16 @@ from cnkh_pos.services.printing import (
     WINDOWS_DEFAULT_PRINTER,
     PrintingService,
     Receipt,
+    resolve_checkout_qr_path,
     resolve_receipt_qr_path,
 )
 from cnkh_pos.ui.admin.settings_pages import ReceiptSettingsWidget
+from cnkh_pos.ui.dialogs.checkout import (
+    ADMIN_MISSING_QR_HINT,
+    STAFF_MISSING_QR_MESSAGE,
+    CheckoutDialog,
+)
+from cnkh_pos.ui.dialogs.rounded_checkout import RoundedCheckoutDialog
 
 
 def _app() -> QApplication:
@@ -143,3 +150,114 @@ def test_render_pdf_includes_configured_qr_image(local_paths, tmp_path):
     assert b"/XObject" in pdf_bytes or b"Image" in pdf_bytes or b"IDAT" in pdf_bytes
     text = PrintingService.render_text(receipt)
     assert "[QR image attached]" in text
+
+
+
+def _select_payment(dialog: CheckoutDialog, method: str) -> None:
+    button = next(
+        btn
+        for btn in dialog.method_group.buttons()
+        if btn.property("paymentMethod") == method
+    )
+    button.setChecked(True)
+
+
+def _select_deposit(dialog: CheckoutDialog, method: str) -> None:
+    button = next(
+        btn
+        for btn in dialog.deposit_group.buttons()
+        if btn.property("depositMethod") == method
+    )
+    button.setChecked(True)
+
+
+def test_resolve_checkout_qr_path_ignores_qr_enabled(local_paths):
+    paths = local_paths
+    assert resolve_checkout_qr_path(paths=paths) is None
+    qr = _tiny_png(paths.assets / RECEIPT_QR_IMAGE_NAME)
+    assert resolve_checkout_qr_path(paths=paths) == qr
+    # Print helper still requires qr_enabled.
+    assert (
+        resolve_receipt_qr_path(
+            {"qr_enabled": False, "qr_image": qr.name}, paths=paths
+        )
+        is None
+    )
+    assert (
+        resolve_receipt_qr_path(
+            {"qr_enabled": True, "qr_image": qr.name}, paths=paths
+        )
+        == qr
+    )
+
+
+def test_checkout_duitnow_shows_qr_when_image_present(local_paths):
+    _app()
+    paths = local_paths
+    _tiny_png(paths.assets / RECEIPT_QR_IMAGE_NAME)
+    dialog = CheckoutDialog(1000, paths=paths, is_admin=False)
+    assert dialog.duitnow_qr_panel.isHidden()
+    _select_payment(dialog, "DUITNOW_QR")
+    assert not dialog.duitnow_qr_panel.isHidden()
+    assert not dialog.duitnow_qr_preview.isHidden()
+    assert not dialog.duitnow_qr_preview.pixmap().isNull()
+    assert dialog.duitnow_qr_message.isHidden()
+    # Staff checkout must not expose upload/clear controls.
+    from PySide6.QtWidgets import QPushButton
+
+    assert dialog.findChild(QPushButton, "ReceiptQrUploadButton") is None
+    assert dialog.findChild(QPushButton, "ReceiptQrClearButton") is None
+    dialog.close()
+
+
+def test_checkout_duitnow_shows_missing_message_without_image(local_paths):
+    _app()
+    paths = local_paths
+    staff = CheckoutDialog(1000, paths=paths, is_admin=False)
+    _select_payment(staff, "DUITNOW_QR")
+    assert not staff.duitnow_qr_panel.isHidden()
+    assert staff.duitnow_qr_preview.isHidden()
+    assert not staff.duitnow_qr_message.isHidden()
+    assert staff.duitnow_qr_message.text() == STAFF_MISSING_QR_MESSAGE
+    staff.close()
+
+    admin = CheckoutDialog(1000, paths=paths, is_admin=True)
+    _select_payment(admin, "DUITNOW_QR")
+    assert admin.duitnow_qr_message.text() == ADMIN_MISSING_QR_HINT
+    admin.close()
+
+
+def test_credit_deposit_duitnow_shows_qr(local_paths):
+    _app()
+    paths = local_paths
+    _tiny_png(paths.assets / RECEIPT_QR_IMAGE_NAME)
+    dialog = RoundedCheckoutDialog(
+        1000, customers=[(1, "Customer")], paths=paths, is_admin=False
+    )
+    _select_payment(dialog, "CREDIT")
+    dialog.paid_input.setText("5.00")
+    assert not dialog.deposit_buttons_host.isHidden()
+    _select_deposit(dialog, "DUITNOW_QR")
+    assert not dialog.duitnow_qr_panel.isHidden()
+    assert not dialog.duitnow_qr_preview.isHidden()
+    assert not dialog.duitnow_qr_preview.pixmap().isNull()
+    dialog.close()
+
+
+def test_receipt_settings_upload_controls_are_admin_widget_only(prepared_db, local_paths):
+    from PySide6.QtWidgets import QLabel, QPushButton
+
+    _app()
+    database, user = prepared_db
+    widget = ReceiptSettingsWidget(database, user)
+    upload = widget.findChild(QPushButton, "ReceiptQrUploadButton")
+    clear = widget.findChild(QPushButton, "ReceiptQrClearButton")
+    section_labels = [
+        label.text()
+        for label in widget.findChildren(QLabel)
+        if "DuitNow 收款码（仅管理员可改）" in label.text()
+    ]
+    assert upload is not None
+    assert clear is not None
+    assert section_labels
+    widget.close()

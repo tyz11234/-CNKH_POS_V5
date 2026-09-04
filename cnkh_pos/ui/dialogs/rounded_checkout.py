@@ -25,6 +25,8 @@ class RoundedCheckoutDialog(CheckoutDialog):
         *,
         customers: list[tuple[int, str]] | None = None,
         quick_settings_callback=None,
+        paths=None,
+        is_admin: bool = False,
     ):
         self.raw_total_cents = int(total_cents)
         super().__init__(
@@ -33,6 +35,8 @@ class RoundedCheckoutDialog(CheckoutDialog):
             parent,
             customers=customers,
             quick_settings_callback=quick_settings_callback,
+            paths=paths,
+            is_admin=is_admin,
         )
         self.setMinimumHeight(700)
         self.total_display = self.findChild(QLabel, "MoneyHero")

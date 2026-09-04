@@ -28,6 +28,29 @@ def receipt_qr_enabled(settings: dict[str, object]) -> bool:
     return bool(value)
 
 
+def resolve_checkout_qr_path(*, paths: AppPaths | None = None) -> Path | None:
+    """Return store DuitNow QR image when the asset file exists.
+
+    Checkout display uses file presence only; receipt printing stays gated by
+    ``qr_enabled`` via :func:`resolve_receipt_qr_path`.
+    """
+    app_paths = paths or AppPaths.default()
+    candidates = (
+        app_paths.receipt_qr_image,
+        app_paths.assets / RECEIPT_QR_IMAGE_NAME,
+        app_paths.assets / "receipt_qr.jpg",
+    )
+    seen: set[Path] = set()
+    for candidate in candidates:
+        key = candidate.resolve() if candidate.exists() else candidate
+        if key in seen:
+            continue
+        seen.add(key)
+        if candidate.is_file() and candidate.stat().st_size > 0:
+            return candidate
+    return None
+
+
 def resolve_receipt_qr_path(
     settings: dict[str, object], *, paths: AppPaths | None = None
 ) -> Path | None:
