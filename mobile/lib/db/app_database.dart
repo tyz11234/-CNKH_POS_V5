@@ -60,7 +60,7 @@ class AppDatabase {
     final path = p.join(dir.path, 'cnkh_pos_mobile.db');
     _db = await openDatabase(
       path,
-      version: 4,
+      version: 6,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
       onOpen: (db) async {
@@ -88,7 +88,29 @@ CREATE TABLE products (
   stock REAL NOT NULL DEFAULT 0,
   unit TEXT NOT NULL DEFAULT 'pcs',
   category TEXT NOT NULL DEFAULT '',
-  is_deleted INTEGER NOT NULL DEFAULT 0
+  is_deleted INTEGER NOT NULL DEFAULT 0,
+  image_path TEXT NOT NULL DEFAULT '',
+  reorder_level REAL NOT NULL DEFAULT 0
+)''');
+    await db.execute('''
+CREATE TABLE categories (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  is_deleted INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT ''
+)''');
+    await db.execute('''
+CREATE TABLE barcode_print_queue (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL,
+  barcode TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  sku TEXT NOT NULL DEFAULT '',
+  price_cents INTEGER NOT NULL DEFAULT 0,
+  copies INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL,
+  synced_at TEXT
 )''');
     await db.execute('''
 CREATE TABLE customers (
@@ -240,6 +262,59 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   reason TEXT NOT NULL DEFAULT ''
 )''');
     }
+    if (oldVersion < 5) {
+      await db.execute('''
+CREATE TABLE IF NOT EXISTS categories (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  is_deleted INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT ''
+)''');
+      final cols5 = await db.rawQuery('PRAGMA table_info(products)');
+      final names5 = <String>{
+        for (final row in cols5) (row['name'] as String?) ?? '',
+      };
+      if (!names5.contains('image_path')) {
+        await db.execute(
+            "ALTER TABLE products ADD COLUMN image_path TEXT NOT NULL DEFAULT ''");
+      }
+      if (!names5.contains('reorder_level')) {
+        await db.execute(
+            'ALTER TABLE products ADD COLUMN reorder_level REAL NOT NULL DEFAULT 0');
+      }
+      final cats = await db.rawQuery(
+        "SELECT DISTINCT category FROM products WHERE category IS NOT NULL AND trim(category) != '' AND is_deleted=0",
+      );
+      for (final row in cats) {
+        final name = (row['category'] as String?)?.trim() ?? '';
+        if (name.isEmpty) continue;
+        await db.insert(
+          'categories',
+          {
+            'id': newId(),
+            'name': name,
+            'is_deleted': 0,
+            'updated_at': DateTime.now().toIso8601String(),
+          },
+          conflictAlgorithm: ConflictAlgorithm.ignore,
+        );
+      }
+    }
+    if (oldVersion < 6) {
+      await db.execute('''
+CREATE TABLE IF NOT EXISTS barcode_print_queue (
+  id TEXT PRIMARY KEY,
+  product_id TEXT NOT NULL,
+  barcode TEXT NOT NULL,
+  product_name TEXT NOT NULL,
+  sku TEXT NOT NULL DEFAULT '',
+  price_cents INTEGER NOT NULL DEFAULT 0,
+  copies INTEGER NOT NULL DEFAULT 1,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL,
+  synced_at TEXT
+)''');
+    }
   }
 
   Future<void> _seed(Database db) async {
@@ -281,6 +356,12 @@ CREATE TABLE IF NOT EXISTS audit_logs (
           conflictAlgorithm: ConflictAlgorithm.ignore);
     }
     batch.insert('settings', {'key': 'store_name', 'value': 'CNKH Hardware'},
+        conflictAlgorithm: ConflictAlgorithm.ignore);
+    batch.insert('settings', {'key': 'product_images_enabled', 'value': '0'},
+        conflictAlgorithm: ConflictAlgorithm.ignore);
+    batch.insert('settings', {'key': 'bt_printer_enabled', 'value': '0'},
+        conflictAlgorithm: ConflictAlgorithm.ignore);
+    batch.insert('settings', {'key': 'low_stock_threshold', 'value': '10'},
         conflictAlgorithm: ConflictAlgorithm.ignore);
     await batch.commit(noResult: true);
   }

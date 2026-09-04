@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 
 import '../models/app_user.dart';
@@ -39,13 +40,22 @@ class CartScreen extends StatefulWidget {
 class _CartScreenState extends State<CartScreen> {
   final _search = TextEditingController();
   List<Product> _results = [];
+  List<Category> _categories = [];
+  String _category = ''; // empty = 全部
   bool _loading = true;
+  bool _imagesOn = false;
 
   @override
   void initState() {
     super.initState();
     _reload('');
     _search.addListener(() => _reload(_search.text));
+    widget.repo.listCategories().then((c) {
+      if (mounted) setState(() => _categories = c);
+    });
+    widget.repo.productImagesEnabled().then((v) {
+      if (mounted) setState(() => _imagesOn = v);
+    });
   }
 
   @override
@@ -55,7 +65,10 @@ class _CartScreenState extends State<CartScreen> {
   }
 
   Future<void> _reload(String q) async {
-    final list = await widget.repo.searchProducts(q);
+    final list = await widget.repo.searchProducts(
+      q,
+      category: _category.isEmpty ? null : _category,
+    );
     if (!mounted) return;
     setState(() {
       _results = list;
@@ -266,6 +279,38 @@ class _CartScreenState extends State<CartScreen> {
               ),
               const SizedBox(height: 6),
               SizedBox(
+                height: 36,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 6),
+                      child: FilterChip(
+                        label: const Text('全部'),
+                        selected: _category.isEmpty,
+                        onSelected: (_) {
+                          setState(() => _category = '');
+                          _reload(_search.text);
+                        },
+                      ),
+                    ),
+                    for (final c in _categories)
+                      Padding(
+                        padding: const EdgeInsets.only(right: 6),
+                        child: FilterChip(
+                          label: Text(c.name),
+                          selected: _category == c.name,
+                          onSelected: (_) {
+                            setState(() => _category = c.name);
+                            _reload(_search.text);
+                          },
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 6),
+              SizedBox(
                 width: double.infinity,
                 height: 44,
                 child: FilledButton.icon(
@@ -322,7 +367,7 @@ class _CartScreenState extends State<CartScreen> {
                   separatorBuilder: (_, __) => const SizedBox(width: 8),
                   itemBuilder: (context, i) {
                     final p = _results[i];
-                    return _ProductChip(product: p, onTap: () { _add(p); });
+                    return _ProductChip(product: p, showImage: _imagesOn, onTap: () { _add(p); });
                   },
                 ),
         ),
@@ -419,9 +464,13 @@ class _CartScreenState extends State<CartScreen> {
 class _ProductChip extends StatelessWidget {
   final Product product;
   final VoidCallback onTap;
-  const _ProductChip({required this.product, required this.onTap});
+  final bool showImage;
+  const _ProductChip({required this.product, required this.onTap, this.showImage = false});
   @override
   Widget build(BuildContext context) {
+    final hasImg = showImage &&
+        product.imagePath.isNotEmpty &&
+        File(product.imagePath).existsSync();
     return Material(
       color: Colors.white,
       borderRadius: BorderRadius.circular(14),
@@ -438,6 +487,12 @@ class _ProductChip extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              if (hasImg)
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.file(File(product.imagePath),
+                      height: 36, width: double.infinity, fit: BoxFit.cover),
+                ),
               Text(product.nameZh,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

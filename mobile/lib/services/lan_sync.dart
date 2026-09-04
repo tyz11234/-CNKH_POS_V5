@@ -8,6 +8,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../db/app_database.dart';
 import '../models/product.dart';
 import 'pos_repository.dart';
+import 'product_images.dart';
 
 const String kPairingPrefix = 'cnkh-sync:v1|';
 
@@ -155,18 +156,25 @@ class LanSyncClient {
     lastError = null;
     try {
       final since = await repo.getSetting('lan_sync_products_cursor');
-      final productsUri = Uri.parse(
-        '${cfg.normalizedBase}/api/v1/products${since.isEmpty ? '' : '?since=${Uri.encodeQueryComponent(since)}'}',
-      );
-      final customersUri = Uri.parse(
-        '${cfg.normalizedBase}/api/v1/customers${since.isEmpty ? '' : '?since=${Uri.encodeQueryComponent(since)}'}',
-      );
+      final q = since.isEmpty ? '' : '?since=${Uri.encodeQueryComponent(since)}';
+      final productsUri = Uri.parse('${cfg.normalizedBase}/api/v1/products$q');
+      final customersUri = Uri.parse('${cfg.normalizedBase}/api/v1/customers$q');
+      final categoriesUri =
+          Uri.parse('${cfg.normalizedBase}/api/v1/categories$q');
       final pRes = await http
           .get(productsUri, headers: _headers(cfg))
           .timeout(const Duration(seconds: 30));
       final cRes = await http
           .get(customersUri, headers: _headers(cfg))
           .timeout(const Duration(seconds: 30));
+      Map<String, dynamic> catBody = {'ok': true, 'items': []};
+      try {
+        final catRes = await http
+            .get(categoriesUri, headers: _headers(cfg))
+            .timeout(const Duration(seconds: 20));
+        catBody =
+            jsonDecode(utf8.decode(catRes.bodyBytes)) as Map<String, dynamic>;
+      } catch (_) {}
       final pBody =
           jsonDecode(utf8.decode(pRes.bodyBytes)) as Map<String, dynamic>;
       final cBody =
@@ -176,9 +184,16 @@ class LanSyncClient {
 
       final products = (pBody['items'] as List?) ?? [];
       final customers = (cBody['items'] as List?) ?? [];
+      final categories = (catBody['ok'] == true ? catBody['items'] as List? : []) ?? [];
       var maxCursor = since;
       final d = await _db.db;
       await d.transaction((txn) async {
+        for (final raw in categories) {
+          final m = Map<String, dynamic>.from(raw as Map);
+          final updated = (m['updated_at'] as String?) ?? '';
+          if (updated.compareTo(maxCursor) > 0) maxCursor = updated;
+          await _upsertCategory(txn, m);
+        }
         for (final raw in products) {
           final m = Map<String, dynamic>.from(raw as Map);
           final updated = (m['updated_at'] as String?) ?? '';
@@ -192,12 +207,25 @@ class LanSyncClient {
           await _upsertCustomer(txn, m);
         }
       });
+      // Optionally pull images for products that advertise has_image
+      final imagesOn = await repo.productImagesEnabled();
+      if (imagesOn) {
+        for (final raw in products) {
+          final m = Map<String, dynamic>.from(raw as Map);
+          if (m['has_image'] == true && m['pc_id'] != null) {
+            try {
+              await pullProductImage(cfg, pcId: (m['pc_id'] as num).toInt(),
+                  localProductId: 'pc-${m['pc_id']}');
+            } catch (_) {}
+          }
+        }
+      }
       await repo.setSetting('lan_sync_products_cursor', maxCursor);
       await repo.setSetting(
         'lan_sync_last_pull',
         DateTime.now().toIso8601String(),
       );
-      return 'Pulled ${products.length} products, ${customers.length} customers';
+      return 'Pulled ${products.length} products, ${customers.length} customers, ${categories.length} categories';
     } catch (e) {
       lastError = '$e';
       rethrow;
@@ -226,6 +254,7 @@ class LanSyncClient {
       if (rows.isNotEmpty) existing = rows.first;
     }
     final id = (existing?['id'] as String?) ?? 'pc-$pcId';
+    final existingImg = (existing?['image_path'] as String?) ?? '';
     final product = Product(
       id: id,
       nameZh: (m['name_zh'] as String?) ?? (m['name'] as String?) ?? '',
@@ -238,6 +267,8 @@ class LanSyncClient {
       unit: (m['unit'] as String?) ?? 'pcs',
       category: (m['category'] as String?) ?? '',
       isDeleted: (m['is_deleted'] as num?)?.toInt() ?? 0,
+      imagePath: existingImg,
+      reorderLevel: (m['reorder_level'] as num?)?.toDouble() ?? 0,
     );
     await txn.insert('products', product.toMap(),
         conflictAlgorithm: ConflictAlgorithm.replace);
@@ -271,6 +302,114 @@ class LanSyncClient {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+
+  Future<void> _upsertCategory(
+      DatabaseExecutor txn, Map<String, dynamic> m) async {
+    final name = ((m['name'] as String?) ?? '').trim();
+    if (name.isEmpty) return;
+    final pcId = m['pc_id'];
+    final existing = await txn.query(
+      'categories',
+      where: 'name=? COLLATE NOCASE',
+      whereArgs: [name],
+      limit: 1,
+    );
+    final id = existing.isNotEmpty
+        ? (existing.first['id'] as String)
+        : 'pc-cat-$pcId';
+    await txn.insert(
+      'categories',
+      {
+        'id': id,
+        'name': name,
+        'is_deleted': (m['is_deleted'] as num?)?.toInt() ?? 0,
+        'updated_at': (m['updated_at'] as String?) ??
+            DateTime.now().toIso8601String(),
+      },
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  Future<void> pullProductImage(
+    LanSyncConfig cfg, {
+    required int pcId,
+    required String localProductId,
+  }) async {
+    final uri =
+        Uri.parse('${cfg.normalizedBase}/api/v1/product_images/$pcId');
+    final res = await http
+        .get(uri, headers: _headers(cfg))
+        .timeout(const Duration(seconds: 20));
+    if (res.statusCode != 200) return;
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (body['ok'] != true) return;
+    final b64 = body['base64'] as String?;
+    if (b64 == null || b64.isEmpty) return;
+    final store = ProductImageStore();
+    final saved = await store.saveBase64(
+      localProductId,
+      b64,
+      ext: (body['ext'] as String?) ?? 'jpg',
+    );
+    if (saved != null) {
+      final d = await _db.db;
+      await d.update('products', {'image_path': saved},
+          where: 'id=?', whereArgs: [localProductId]);
+    }
+  }
+
+  Future<String> pushCategories(LanSyncConfig cfg) async {
+    final cats = await repo.listCategories();
+    final uri = Uri.parse('${cfg.normalizedBase}/api/v1/categories');
+    final res = await http
+        .post(
+          uri,
+          headers: _headers(cfg),
+          body: jsonEncode({
+            'items': [
+              for (final c in cats) {'name': c.name},
+            ],
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (body['ok'] != true) throw StateError('${body['error']}');
+    return 'Pushed ${body['saved'] ?? cats.length} categories';
+  }
+
+  Future<String> pushBarcodeQueue(LanSyncConfig cfg) async {
+    final rows = await repo.listBarcodeQueue(status: 'pending');
+    if (rows.isEmpty) return 'No pending barcode queue';
+    final uri = Uri.parse('${cfg.normalizedBase}/api/v1/barcode_queue');
+    final res = await http
+        .post(
+          uri,
+          headers: _headers(cfg),
+          body: jsonEncode({
+            'items': [
+              for (final m in rows)
+                {
+                  'product_id': m['product_id'],
+                  'barcode': m['barcode'],
+                  'product_name': m['product_name'],
+                  'sku': m['sku'],
+                  'price_cents': m['price_cents'],
+                  'copies': m['copies'],
+                  'created_at': m['created_at'],
+                  'source': 'phone',
+                },
+            ],
+          }),
+        )
+        .timeout(const Duration(seconds: 20));
+    final body = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+    if (body['ok'] != true) throw StateError('${body['error']}');
+    for (final m in rows) {
+      await repo.clearBarcodeQueueItem(m['id'] as String, status: 'synced');
+    }
+    return 'Pushed barcode queue ${body['saved'] ?? rows.length}';
   }
 
   Future<String> pushSales(LanSyncConfig cfg) async {
@@ -427,8 +566,17 @@ class LanSyncClient {
     final a = await pullCatalog(cfg);
     final b = await pullSales(cfg);
     final c = await pushSales(cfg);
+    var d = '';
+    try {
+      d = await pushBarcodeQueue(cfg);
+    } catch (e) {
+      d = 'barcode queue: $e';
+    }
+    try {
+      await pushCategories(cfg);
+    } catch (_) {}
     await repo.setSetting('lan_sync_last_full', DateTime.now().toIso8601String());
-    return '$a\n$b\n$c';
+    return '$a\n$b\n$c\n$d';
   }
 
   Future<String> fullSync(LanSyncConfig cfg) => forceReconcile(cfg);
@@ -447,6 +595,7 @@ class LanLiveSync {
   bool connected = false;
   int pendingCount = 0;
   void Function()? onRemoteChange;
+  void Function(Map<String, dynamic> event)? onLowStock;
   void Function(SyncLinkState state, int pending)? onStatusChanged;
 
   SyncLinkState get linkState {
@@ -472,8 +621,20 @@ class LanLiveSync {
         (msg) async {
           try {
             final data = msg is String ? jsonDecode(msg) : null;
-            if (data is Map && data['type'] == 'sale') {
+            if (data is! Map) return;
+            final t = data['type'];
+            if (t == 'sale') {
               await _onSaleEvent();
+            } else if (t == 'low_stock') {
+              onLowStock?.call(Map<String, dynamic>.from(data));
+            } else if (t == 'category' || t == 'product_image') {
+              final c = _cfg;
+              if (c != null) {
+                try {
+                  await client.pullCatalog(c);
+                  onRemoteChange?.call();
+                } catch (_) {}
+              }
             }
           } catch (_) {}
         },

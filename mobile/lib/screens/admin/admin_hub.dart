@@ -8,6 +8,7 @@ import '../../services/pos_repository.dart';
 import '../../theme/cnkh_theme.dart';
 import '../../widgets/money_text.dart';
 import '../sales_list_screen.dart';
+import 'products_admin.dart';
 
 class AdminHub extends StatelessWidget {
   final AppUser user;
@@ -26,6 +27,8 @@ class AdminHub extends StatelessWidget {
     final tiles = <_Tile>[
       _Tile('主页 Dashboard', Icons.dashboard_outlined, () => _open(context, DashboardPage(repo: repo))),
       _Tile('商品 Products', Icons.inventory_2_outlined, () => _open(context, ProductsAdminPage(repo: repo, user: user))),
+      _Tile('分类 Categories', Icons.category_outlined, () => _open(context, CategoriesAdminPage(repo: repo))),
+      _Tile('条码队列 Barcode Queue', Icons.qr_code_2, () => _open(context, BarcodeQueuePage(repo: repo))),
       _Tile('销售 Sales', Icons.receipt_long, () => _open(
             context,
             _ScaffoldPage(
@@ -169,125 +172,6 @@ class _DashboardPageState extends State<DashboardPage> {
   }
 }
 
-class ProductsAdminPage extends StatefulWidget {
-  final PosRepository repo;
-  final AppUser user;
-  const ProductsAdminPage({super.key, required this.repo, required this.user});
-  @override
-  State<ProductsAdminPage> createState() => _ProductsAdminPageState();
-}
-
-class _ProductsAdminPageState extends State<ProductsAdminPage> {
-  List<Product> _items = [];
-  final _q = TextEditingController();
-
-  @override
-  void initState() {
-    super.initState();
-    _load();
-    _q.addListener(_load);
-  }
-
-  Future<void> _load() async {
-    final list = await widget.repo.searchProducts(_q.text, limit: 200);
-    if (mounted) setState(() => _items = list);
-  }
-
-  Future<void> _edit([Product? existing]) async {
-    final nameZh = TextEditingController(text: existing?.nameZh ?? '');
-    final nameEn = TextEditingController(text: existing?.nameEn ?? '');
-    final sku = TextEditingController(text: existing?.sku ?? '');
-    final barcode = TextEditingController(text: existing?.barcode ?? '');
-    final price = TextEditingController(
-        text: existing == null ? '' : centsToRm(existing.priceCents).toStringAsFixed(2));
-    final stock = TextEditingController(text: existing?.stock.toString() ?? '0');
-    final unit = TextEditingController(text: existing?.unit ?? 'pcs');
-    final cat = TextEditingController(text: existing?.category ?? '');
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(existing == null ? '新增商品' : '编辑商品'),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(controller: nameZh, decoration: const InputDecoration(labelText: '中文名')),
-              TextField(controller: nameEn, decoration: const InputDecoration(labelText: 'English')),
-              TextField(controller: sku, decoration: const InputDecoration(labelText: 'SKU')),
-              TextField(controller: barcode, decoration: const InputDecoration(labelText: 'Barcode')),
-              TextField(controller: price, decoration: const InputDecoration(labelText: '售价 RM', prefixText: 'RM ')),
-              TextField(controller: stock, decoration: const InputDecoration(labelText: '库存')),
-              TextField(controller: unit, decoration: const InputDecoration(labelText: '单位')),
-              TextField(controller: cat, decoration: const InputDecoration(labelText: '分类')),
-            ],
-          ),
-        ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('保存')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    final p = Product(
-      id: existing?.id ?? AppDatabase.newId(),
-      nameZh: nameZh.text.trim(),
-      nameEn: nameEn.text.trim(),
-      sku: sku.text.trim(),
-      barcode: barcode.text.trim(),
-      priceCents: rmToCents(double.tryParse(price.text.trim()) ?? 0),
-      costCents: existing?.costCents ?? 0,
-      stock: double.tryParse(stock.text.trim()) ?? 0,
-      unit: unit.text.trim().isEmpty ? 'pcs' : unit.text.trim(),
-      category: cat.text.trim(),
-    );
-    await widget.repo.upsertProduct(p);
-    await _load();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return _ScaffoldPage(
-      title: '商品 / Products',
-      actions: [
-        IconButton(onPressed: () => _edit(), icon: const Icon(Icons.add)),
-      ],
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(12),
-            child: TextField(
-              controller: _q,
-              decoration: const InputDecoration(
-                prefixIcon: Icon(Icons.search),
-                hintText: '搜索商品',
-              ),
-            ),
-          ),
-          Expanded(
-            child: ListView.builder(
-              itemCount: _items.length,
-              itemBuilder: (context, i) {
-                final p = _items[i];
-                return ListTile(
-                  title: Text(p.nameZh, style: const TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: Text('${p.sku} · ${p.barcode}\n库存 ${p.stock} ${p.unit}'),
-                  isThreeLine: true,
-                  trailing: MoneyText(amountCents: p.priceCents, fontSize: 14),
-                  onTap: () => _edit(p),
-                  onLongPress: () async {
-                    await widget.repo.softDeleteProduct(p.id);
-                    await _load();
-                  },
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class EntitiesPage extends StatefulWidget {
   final PosRepository repo;

@@ -31,7 +31,10 @@ from cnkh_pos.config import AppPaths
 from cnkh_pos.database.connection import Database
 from cnkh_pos.services.auth import AuthenticatedUser
 from cnkh_pos.services.held_orders import HeldOrderService, cart_state_from_held_payload
-from cnkh_pos.services.lan_sync_server import publish_sync_event
+from cnkh_pos.services.lan_sync_server import (
+    publish_low_stock_events,
+    publish_sync_event,
+)
 from cnkh_pos.services.money import (
     clamp_discount_cents,
     format_myr,
@@ -483,6 +486,7 @@ class StaffWindow(QMainWindow):
                 receipt_no=result.receipt_no,
                 sale_id=result.sale_id,
             )
+            publish_low_stock_events(self.database)
         except Exception:
             pass
 

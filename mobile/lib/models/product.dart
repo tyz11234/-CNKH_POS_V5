@@ -10,6 +10,8 @@ class Product {
   final String unit;
   final String category;
   final int isDeleted;
+  final String imagePath;
+  final double reorderLevel;
 
   const Product({
     required this.id,
@@ -23,9 +25,13 @@ class Product {
     this.unit = 'pcs',
     this.category = '',
     this.isDeleted = 0,
+    this.imagePath = '',
+    this.reorderLevel = 0,
   });
 
   String get label => '$nameZh / $nameEn';
+
+  bool get hasImage => imagePath.trim().isNotEmpty;
 
   Product copyWith({
     String? nameZh,
@@ -38,6 +44,8 @@ class Product {
     String? unit,
     String? category,
     int? isDeleted,
+    String? imagePath,
+    double? reorderLevel,
   }) =>
       Product(
         id: id,
@@ -51,6 +59,8 @@ class Product {
         unit: unit ?? this.unit,
         category: category ?? this.category,
         isDeleted: isDeleted ?? this.isDeleted,
+        imagePath: imagePath ?? this.imagePath,
+        reorderLevel: reorderLevel ?? this.reorderLevel,
       );
 
   Map<String, Object?> toMap() => {
@@ -65,6 +75,8 @@ class Product {
         'unit': unit,
         'category': category,
         'is_deleted': isDeleted,
+        'image_path': imagePath,
+        'reorder_level': reorderLevel,
       };
 
   factory Product.fromMap(Map<String, Object?> m) => Product(
@@ -79,6 +91,8 @@ class Product {
         unit: (m['unit'] as String?) ?? 'pcs',
         category: (m['category'] as String?) ?? '',
         isDeleted: (m['is_deleted'] as int?) ?? 0,
+        imagePath: (m['image_path'] as String?) ?? '',
+        reorderLevel: (m['reorder_level'] as num?)?.toDouble() ?? 0,
       );
 
   factory Product.fromJson(Map<String, dynamic> j) => Product(
@@ -92,5 +106,38 @@ class Product {
         stock: (j['stock'] as num?)?.toDouble() ?? 0,
         unit: j['unit'] as String? ?? 'pcs',
         category: j['category'] as String? ?? '',
+        imagePath: j['imagePath'] as String? ?? j['image_path'] as String? ?? '',
+        reorderLevel:
+            (j['reorderLevel'] as num?)?.toDouble() ??
+            (j['reorder_level'] as num?)?.toDouble() ??
+            0,
+      );
+}
+
+class Category {
+  final String id;
+  final String name;
+  final int isDeleted;
+  final String updatedAt;
+
+  const Category({
+    required this.id,
+    required this.name,
+    this.isDeleted = 0,
+    this.updatedAt = '',
+  });
+
+  Map<String, Object?> toMap() => {
+        'id': id,
+        'name': name,
+        'is_deleted': isDeleted,
+        'updated_at': updatedAt,
+      };
+
+  factory Category.fromMap(Map<String, Object?> m) => Category(
+        id: m['id']! as String,
+        name: m['name']! as String,
+        isDeleted: (m['is_deleted'] as int?) ?? 0,
+        updatedAt: (m['updated_at'] as String?) ?? '',
       );
 }

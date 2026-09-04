@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../db/app_database.dart';
+import '../services/bluetooth_printer.dart';
 import '../services/e_receipt.dart';
 import '../services/pos_repository.dart';
 import '../theme/cnkh_theme.dart';
@@ -139,6 +140,29 @@ Future<void> showSaleSuccessSheet(
                 label: const Text('电子收据 PDF / E-receipt',
                     style: TextStyle(fontWeight: FontWeight.w900)),
               ),
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () async {
+                final bt = BluetoothPrinterService(repo);
+                final msg = await bt.tryPrintSale(sale);
+                if (!ctx.mounted) return;
+                if (msg == 'bt_off') {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('蓝牙打印未开启 / BT printer off')),
+                  );
+                } else if (msg == 'ok') {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    const SnackBar(content: Text('已发送蓝牙小票 / Printed')),
+                  );
+                } else {
+                  ScaffoldMessenger.of(ctx).showSnackBar(
+                    SnackBar(content: Text(msg), backgroundColor: CnkhColors.danger),
+                  );
+                }
+              },
+              icon: const Icon(Icons.print),
+              label: const Text('蓝牙打印小票 / BT print'),
             ),
             const SizedBox(height: 8),
             OutlinedButton(

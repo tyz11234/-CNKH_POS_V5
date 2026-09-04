@@ -95,3 +95,42 @@ def test_lan_sync_health_and_auth(tmp_path):
         assert again["skipped"] == 1
     finally:
         srv.stop()
+
+
+def test_lan_sync_categories_and_barcode_queue(tmp_path):
+    db_path = tmp_path / "hardware_pos.db"
+    backup = tmp_path / "backups"
+    bootstrap_database(db_path, backup)
+    database = Database(db_path)
+    # seed a category
+    with database.transaction() as conn:
+        conn.execute(
+            "INSERT INTO categories(name, created_at, updated_at) VALUES ('水管', '2026-09-04', '2026-09-04')"
+        )
+    srv = LanSyncServer(database, host="127.0.0.1", port=18788, token="secret")
+    srv.start()
+    try:
+        cats = _get("http://127.0.0.1:18788/api/v1/categories", token="secret")
+        assert cats["ok"] is True
+        assert any(c.get("name") == "水管" for c in cats["items"])
+        pushed = _post(
+            "http://127.0.0.1:18788/api/v1/barcode_queue",
+            {
+                "items": [
+                    {
+                        "barcode": "1234567890128",
+                        "product_name": "测试商品",
+                        "sku": "T1",
+                        "copies": 2,
+                    }
+                ]
+            },
+            token="secret",
+        )
+        assert pushed["ok"] is True
+        assert pushed["saved"] >= 1
+        q = _get("http://127.0.0.1:18788/api/v1/barcode_queue", token="secret")
+        assert q["ok"] is True
+        assert any(i.get("barcode") == "1234567890128" for i in q["items"])
+    finally:
+        srv.stop()

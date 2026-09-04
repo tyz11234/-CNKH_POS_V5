@@ -15,6 +15,7 @@ import 'db/app_database.dart';
 import 'services/qr_storage.dart';
 import 'theme/cnkh_theme.dart';
 import 'widgets/e_receipt_actions.dart';
+import 'services/bluetooth_printer.dart';
 import 'services/lan_sync.dart';
 import 'screens/barcode_scan_screen.dart';
 
@@ -101,6 +102,31 @@ class _HomeShellState extends State<HomeShell> {
   void initState() {
     super.initState();
     _live.onRemoteChange = _bumpData;
+    _live.onLowStock = (event) {
+      if (!mounted) return;
+      final name = (event['name'] ?? event['sku'] ?? '商品').toString();
+      final stock = event['stock'];
+      final thr = event['threshold'];
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('缺货提醒 / Low stock: $name (库存 $stock ≤ $thr)'),
+          backgroundColor: const Color(0xFFB26A00),
+          duration: const Duration(seconds: 4),
+          action: widget.user.isAdmin
+              ? SnackBarAction(
+                  label: '商品',
+                  textColor: Colors.white,
+                  onPressed: () {
+                    setState(() {
+                      // Admin tab index: POS=0 Today=1 Admin=2 Settings=3
+                      _tab = 2;
+                    });
+                  },
+                )
+              : null,
+        ),
+      );
+    };
     _live.onStatusChanged = (state, pending) {
       if (!mounted) return;
       setState(() {
@@ -239,6 +265,19 @@ class _HomeShellState extends State<HomeShell> {
             // Near-real-time: push sale to PC if paired
             // ignore: unawaited_futures
             _live.onLocalSale(sale);
+            // Optional BT print — never blocks checkout
+            // ignore: unawaited_futures
+            () async {
+              try {
+                final bt = BluetoothPrinterService(widget.repo);
+                if (!await bt.enabled()) return;
+                final msg = await bt.tryPrintSale(sale);
+                if (!mounted || msg == 'bt_off' || msg == 'ok') return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text(msg)),
+                );
+              } catch (_) {}
+            }();
             await showSaleSuccessSheet(
               context,
               sale: sale,

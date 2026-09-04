@@ -341,6 +341,9 @@ class ReceiptSettingsWidget(QWidget):
         form.addRow("预览 / Preview", self.qr_preview)
         self._qr_source_path: str | None = None
 
+        bt_note = QLabel("手机端可选蓝牙热敏小票机（默认关）；PC 仍用 Windows/USB 打印机。\nMobile optional Bluetooth thermal printer is separate — PC uses Windows/USB printers.")
+        bt_note.setWordWrap(True)
+        form.addRow("", bt_note)
         save = QPushButton("保存 Receipt Settings")
         save.setObjectName("SuccessButton")
         save.clicked.connect(self.save)
@@ -820,6 +823,27 @@ class SettingsPage(QWidget):
         stock_row.addWidget(self._stock_warn)
         stock_row.addWidget(self._stock_block)
         general_layout.addLayout(stock_row)
+        general_layout.addWidget(QLabel("缺货推送阈值 / Low-stock threshold（low_stock_threshold，默认 10）"))
+        self._low_stock_thr = QLineEdit("10")
+        low_save = QPushButton("保存阈值")
+        low_save.clicked.connect(
+            lambda: _save_setting(
+                database, user, "low_stock_threshold", self._low_stock_thr.text().strip() or "10"
+            )
+        )
+        low_row = QHBoxLayout()
+        low_row.addWidget(self._low_stock_thr)
+        low_row.addWidget(low_save)
+        general_layout.addLayout(low_row)
+        general_layout.addWidget(QLabel("商品图片 / Product images（product_images_enabled）"))
+        img_row = QHBoxLayout()
+        img_on = QPushButton("开启 on")
+        img_off = QPushButton("关闭 off")
+        img_on.clicked.connect(lambda: _save_setting(database, user, "product_images_enabled", "1"))
+        img_off.clicked.connect(lambda: _save_setting(database, user, "product_images_enabled", "0"))
+        img_row.addWidget(img_on)
+        img_row.addWidget(img_off)
+        general_layout.addLayout(img_row)
         general_layout.addWidget(QLabel("挂单超时分钟 / Hold timeout（hold_timeout_minutes）"))
         self._hold_timeout = QLineEdit("30")
         hold_save = QPushButton("保存超时")
@@ -843,7 +867,15 @@ class SettingsPage(QWidget):
             hold = conn.execute(
                 "SELECT value_json FROM settings WHERE key='hold_timeout_minutes'"
             ).fetchone()
+            low = conn.execute(
+                "SELECT value_json FROM settings WHERE key='low_stock_threshold'"
+            ).fetchone()
             conn.close()
+            if low and low[0]:
+                try:
+                    self._low_stock_thr.setText(str(_json.loads(low[0])))
+                except Exception:
+                    self._low_stock_thr.setText(str(low[0]).strip('"') or "10")
             if stock_row and stock_row[0]:
                 try:
                     policy = str(_json.loads(stock_row[0]))

@@ -50,3 +50,13 @@ Default port **8787**, bind `0.0.0.0`.
 - PC: 同步/配对 toolbar + refresh QR (~7 min `exp`)
 - Mobile AppBar 扫码配对; dual-mode product vs `cnkh-sync:`
 - Status: green WS / gray offline / amber pending; force full reconcile
+
+
+## Added in 1.4.0
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET/POST | `/api/v1/categories` | Category pull/push |
+| GET/POST | `/api/v1/product_images/:id` | Product image base64 |
+| GET/POST | `/api/v1/barcode_queue` | Phone→PC barcode print queue |
+| Event | `low_stock` | Stock below threshold push |

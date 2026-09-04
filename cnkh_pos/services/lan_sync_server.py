@@ -433,6 +433,36 @@ def _make_handler(database: Database, expected_token: str, server: LanSyncServer
             if path == "/api/v1/sales":
                 self._send(200, {"ok": True, "items": _pull_sales(database, since)})
                 return
+            if path == "/api/v1/categories":
+                self._send(200, {"ok": True, "items": _pull_categories(database, since)})
+                return
+            if path.startswith("/api/v1/product_images/"):
+                pid_s = path.rsplit("/", 1)[-1]
+                try:
+                    pid = int(pid_s)
+                except ValueError:
+                    self._send(400, {"ok": False, "error": "bad product id"})
+                    return
+                img = _product_image_path(database, pid)
+                if not img.exists():
+                    self._send(404, {"ok": False, "error": "no image"})
+                    return
+                data = img.read_bytes()
+                b64 = base64.b64encode(data).decode("ascii")
+                self._send(
+                    200,
+                    {
+                        "ok": True,
+                        "product_id": pid,
+                        "ext": img.suffix.lstrip(".") or "jpg",
+                        "base64": b64,
+                        "size": len(data),
+                    },
+                )
+                return
+            if path == "/api/v1/barcode_queue":
+                self._send(200, {"ok": True, "items": _pull_barcode_queue(database)})
+                return
             if path == "/api/v1/pairing":
                 self._send(
                     200,
@@ -471,6 +501,10 @@ def _make_handler(database: Database, expected_token: str, server: LanSyncServer
                             if isinstance(s, dict)
                         ],
                     )
+                    try:
+                        publish_low_stock_events(database)
+                    except Exception:
+                        pass
                 self._send(200 if result.get("ok") else 400, result)
                 return
             if path == "/api/v1/notify":
@@ -482,6 +516,75 @@ def _make_handler(database: Database, expected_token: str, server: LanSyncServer
                     if k not in {"type", "source"}
                 })
                 self._send(200, {"ok": True, "event": event})
+                return
+            if path.startswith("/api/v1/product_images/"):
+                pid_s = path.rsplit("/", 1)[-1]
+                try:
+                    pid = int(pid_s)
+                except ValueError:
+                    self._send(400, {"ok": False, "error": "bad product id"})
+                    return
+                b64 = str(payload.get("base64") or "")
+                if not b64:
+                    self._send(400, {"ok": False, "error": "base64 required"})
+                    return
+                try:
+                    raw_img = base64.b64decode(b64)
+                except Exception:
+                    self._send(400, {"ok": False, "error": "invalid base64"})
+                    return
+                if len(raw_img) > 2_500_000:
+                    self._send(400, {"ok": False, "error": "image too large"})
+                    return
+                ext = str(payload.get("ext") or "jpg").lstrip(".").lower() or "jpg"
+                if ext not in {"jpg", "jpeg", "png", "webp"}:
+                    ext = "jpg"
+                dest = _product_images_dir(database) / f"{pid}.{ext}"
+                # remove other extensions
+                for oldp in _product_images_dir(database).glob(f"{pid}.*"):
+                    try:
+                        oldp.unlink()
+                    except Exception:
+                        pass
+                dest.write_bytes(raw_img)
+                publish_sync_event("product_image", source="phone", product_id=pid)
+                self._send(200, {"ok": True, "product_id": pid, "size": len(raw_img)})
+                return
+            if path == "/api/v1/categories":
+                # optional phone→PC category upsert by name
+                items = payload.get("items") or payload.get("categories") or []
+                saved = 0
+                with database.transaction() as conn:
+                    for it in items:
+                        if not isinstance(it, dict):
+                            continue
+                        name = str(it.get("name") or "").strip()
+                        if not name:
+                            continue
+                        now = utc_now_text()
+                        row = conn.execute(
+                            "SELECT id FROM categories WHERE name=? COLLATE NOCASE",
+                            (name,),
+                        ).fetchone()
+                        if row is None:
+                            conn.execute(
+                                "INSERT INTO categories(name, created_at, updated_at) VALUES (?,?,?)",
+                                (name, now, now),
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE categories SET updated_at=?, is_deleted=0 WHERE id=?",
+                                (now, int(row["id"])),
+                            )
+                        saved += 1
+                publish_sync_event("category", source="phone", saved=saved)
+                self._send(200, {"ok": True, "saved": saved})
+                return
+            if path == "/api/v1/barcode_queue":
+                items = payload.get("items") or payload.get("queue") or []
+                saved = _push_barcode_queue(database, items if isinstance(items, list) else [])
+                publish_sync_event("barcode_queue", source="phone", saved=saved)
+                self._send(200, {"ok": True, "saved": saved})
                 return
             self._send(404, {"ok": False, "error": "not found"})
 
@@ -564,24 +667,171 @@ def _make_handler(database: Database, expected_token: str, server: LanSyncServer
     return Handler
 
 
-def _pull_products(database: Database, since: str) -> list[dict[str, Any]]:
+
+
+def _barcode_queue_path(database: Database):
+    from pathlib import Path
+    return Path(database.path).resolve().parent / "barcode_print_queue.json"
+
+
+def _pull_barcode_queue(database: Database) -> list[dict[str, Any]]:
+    path = _barcode_queue_path(database)
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _push_barcode_queue(database: Database, items: list[Any]) -> int:
+    path = _barcode_queue_path(database)
+    existing = _pull_barcode_queue(database)
+    seen = {(str(x.get("barcode")), str(x.get("product_name"))) for x in existing if isinstance(x, dict)}
+    saved = 0
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        key = (str(it.get("barcode") or ""), str(it.get("product_name") or ""))
+        if not key[0]:
+            continue
+        if key in seen:
+            continue
+        existing.append(
+            {
+                "barcode": key[0],
+                "product_name": key[1],
+                "sku": str(it.get("sku") or ""),
+                "price_cents": int(it.get("price_cents") or 0),
+                "copies": max(1, int(it.get("copies") or 1)),
+                "product_id": str(it.get("product_id") or ""),
+                "source": str(it.get("source") or "phone"),
+                "created_at": str(it.get("created_at") or utc_now_text()),
+                "status": "pending",
+            }
+        )
+        seen.add(key)
+        saved += 1
+    path.write_text(json.dumps(existing, ensure_ascii=False, indent=2), encoding="utf-8")
+    return saved
+
+
+def _product_images_dir(database: Database):
+    from pathlib import Path
+    root = Path(database.path).resolve().parent / "product_images"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _product_image_path(database: Database, product_id: int):
+    d = _product_images_dir(database)
+    for ext in ("jpg", "jpeg", "png", "webp"):
+        p = d / f"{product_id}.{ext}"
+        if p.exists():
+            return p
+    return d / f"{product_id}.jpg"
+
+
+def _pull_categories(database: Database, since: str = "") -> list[dict[str, Any]]:
     conn = database.connect(readonly=True)
     try:
         if since:
             rows = conn.execute(
-                """SELECT id,name,sku,barcode,cost_cents,selling_price_cents,
-                          stock_decimal,unit,location,is_deleted,updated_at
-                   FROM products WHERE updated_at > ? ORDER BY updated_at,id""",
+                """SELECT id,name,is_deleted,updated_at FROM categories
+                   WHERE updated_at > ? ORDER BY updated_at,id""",
                 (since,),
             ).fetchall()
         else:
             rows = conn.execute(
-                """SELECT id,name,sku,barcode,cost_cents,selling_price_cents,
-                          stock_decimal,unit,location,is_deleted,updated_at
-                   FROM products ORDER BY updated_at,id"""
+                """SELECT id,name,is_deleted,updated_at FROM categories
+                   ORDER BY name COLLATE NOCASE"""
             ).fetchall()
+        return [
+            {
+                "pc_id": int(r["id"]),
+                "name": r["name"],
+                "is_deleted": int(r["is_deleted"] or 0),
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
+    finally:
+        conn.close()
+
+
+def publish_low_stock_events(database: Database, product_ids: list[int] | None = None) -> list[dict[str, Any]]:
+    """Publish low_stock events for products at/below reorder or default threshold."""
+    conn = database.connect(readonly=True)
+    events: list[dict[str, Any]] = []
+    try:
+        default_thr = 10.0
+        try:
+            import json as _json
+            row = conn.execute(
+                "SELECT value_json FROM settings WHERE key='low_stock_threshold'"
+            ).fetchone()
+            if row and row["value_json"]:
+                raw = row["value_json"]
+                try:
+                    raw = _json.loads(raw)
+                except Exception:
+                    pass
+                default_thr = float(raw)
+        except Exception:
+            pass
+        if product_ids:
+            placeholders = ",".join("?" for _ in product_ids)
+            rows = conn.execute(
+                f"""SELECT id,name,sku,barcode,stock_decimal,low_stock_decimal
+                    FROM products WHERE is_deleted=0 AND id IN ({placeholders})""",
+                tuple(product_ids),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """SELECT id,name,sku,barcode,stock_decimal,low_stock_decimal
+                   FROM products WHERE is_deleted=0"""
+            ).fetchall()
+        for r in rows:
+            stock = float(r["stock_decimal"] or 0)
+            reorder = float(r["low_stock_decimal"] or 0)
+            thr = reorder if reorder > 0 else default_thr
+            if stock <= thr:
+                ev = publish_sync_event(
+                    "low_stock",
+                    source="pc",
+                    product_id=int(r["id"]),
+                    name=r["name"],
+                    sku=r["sku"] or "",
+                    barcode=r["barcode"] or "",
+                    stock=stock,
+                    threshold=thr,
+                )
+                events.append(ev)
+    finally:
+        conn.close()
+    return events
+
+
+def _pull_products(database: Database, since: str) -> list[dict[str, Any]]:
+    conn = database.connect(readonly=True)
+    try:
+        sql = """SELECT p.id,p.name,p.sku,p.barcode,p.cost_cents,p.selling_price_cents,
+                        p.stock_decimal,p.unit,p.location,p.low_stock_decimal,
+                        p.category_id, COALESCE(c.name,'') AS category_name,
+                        p.is_deleted,p.updated_at
+                 FROM products p
+                 LEFT JOIN categories c ON c.id = p.category_id"""
+        if since:
+            rows = conn.execute(
+                sql + " WHERE p.updated_at > ? ORDER BY p.updated_at,p.id",
+                (since,),
+            ).fetchall()
+        else:
+            rows = conn.execute(sql + " ORDER BY p.updated_at,p.id").fetchall()
         out = []
         for r in rows:
+            cat = (r["category_name"] or "").strip() or (r["location"] or "")
             out.append(
                 {
                     "pc_id": int(r["id"]),
@@ -594,7 +844,9 @@ def _pull_products(database: Database, since: str) -> list[dict[str, Any]]:
                     "price_cents": int(r["selling_price_cents"] or 0),
                     "stock": float(r["stock_decimal"] or 0),
                     "unit": r["unit"] or "pcs",
-                    "category": r["location"] or "",
+                    "category": cat,
+                    "reorder_level": float(r["low_stock_decimal"] or 0),
+                    "has_image": _product_image_path(database, int(r["id"])).exists(),
                     "is_deleted": int(r["is_deleted"] or 0),
                     "updated_at": r["updated_at"],
                 }

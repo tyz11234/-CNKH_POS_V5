@@ -37,6 +37,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _stockPolicy = 'warn';
   String _scanFeedback = 'beep';
   final _holdTimeout = TextEditingController(text: '30');
+  final _lowStock = TextEditingController(text: '10');
+  bool _btEnabled = false;
+  bool _imagesEnabled = false;
 
   bool get canEdit => widget.user.canEditQr;
 
@@ -55,6 +58,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     final stock = await widget.repo.getSetting('stock_policy', fallback: 'warn');
     final holdMin = await widget.repo.getSetting('hold_timeout_minutes', fallback: '30');
     final scanFb = await widget.repo.getSetting('scan_feedback', fallback: 'beep');
+    final thr = await widget.repo.getSetting('low_stock_threshold', fallback: '10');
+    final bt = await widget.repo.btPrinterEnabled();
+    final imgs = await widget.repo.productImagesEnabled();
     if (!mounted) return;
     setState(() {
       _path = p;
@@ -65,6 +71,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _stockPolicy = stock == 'block' ? 'block' : 'warn';
       _holdTimeout.text = holdMin;
       _scanFeedback = (scanFb == 'vibrate' || scanFb == 'mute') ? scanFb : 'beep';
+      _lowStock.text = thr;
+      _btEnabled = bt;
+      _imagesEnabled = imgs;
       _loading = false;
     });
   }
@@ -102,6 +111,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _syncHost.dispose();
     _syncToken.dispose();
     _holdTimeout.dispose();
+    _lowStock.dispose();
     super.dispose();
   }
 
@@ -314,6 +324,43 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   ],
                 ),
                 const SizedBox(height: 12),
+                Text('缺货推送阈值 / Low-stock threshold', style: Theme.of(context).textTheme.bodySmall),
+                TextField(
+                  controller: _lowStock,
+                  enabled: canEdit,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(hintText: '10'),
+                  onEditingComplete: () async {
+                    await widget.repo.setSetting(
+                      'low_stock_threshold',
+                      _lowStock.text.trim().isEmpty ? '10' : _lowStock.text.trim(),
+                    );
+                  },
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('蓝牙小票机 / BT receipt printer'),
+                  subtitle: const Text('默认关；失败不阻挡结账。Linux/桌面不可用。'),
+                  value: _btEnabled,
+                  onChanged: canEdit
+                      ? (v) async {
+                          setState(() => _btEnabled = v);
+                          await widget.repo.setSetting('bt_printer_enabled', v ? '1' : '0');
+                        }
+                      : null,
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('商品图片 / Product images'),
+                  subtitle: const Text('Admin 开启后才显示上传与缩略图'),
+                  value: _imagesEnabled,
+                  onChanged: canEdit
+                      ? (v) async {
+                          setState(() => _imagesEnabled = v);
+                          await widget.repo.setSetting('product_images_enabled', v ? '1' : '0');
+                        }
+                      : null,
+                ),
                 OutlinedButton.icon(
                   onPressed: () {
                     Navigator.of(context).push(
@@ -423,11 +470,11 @@ const SizedBox(height: 12),
           child: ListTile(
             leading: const Icon(Icons.info_outline, color: CnkhColors.primary),
             title: const Text('关于 / About'),
-            subtitle: const Text('CNKH POS Mobile 1.3.0 · local-first full port'),
+            subtitle: const Text('CNKH POS Mobile 1.4.0 · continuous scan · categories · images · BT'),
             onTap: () => showAboutDialog(
               context: context,
               applicationName: 'CNKH POS Mobile',
-              applicationVersion: '1.3.0',
+              applicationVersion: '1.4.0',
               applicationLegalese: 'CNKH Hardware companion',
             ),
           ),

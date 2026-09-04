@@ -186,13 +186,21 @@ class PosRepository {
   PosRepository({AppDatabase? database}) : _db = database ?? AppDatabase.instance;
   final AppDatabase _db;
 
-  Future<List<Product>> searchProducts(String query, {int limit = 80}) async {
+  Future<List<Product>> searchProducts(
+    String query, {
+    int limit = 80,
+    String? category,
+  }) async {
     final d = await _db.db;
     final q = query.trim();
+    final cat = (category ?? '').trim();
+    final catClause = cat.isEmpty ? '' : ' AND category=?';
+    final catArgs = cat.isEmpty ? <Object?>[] : <Object?>[cat];
     if (q.isEmpty) {
       final rows = await d.query(
         'products',
-        where: 'is_deleted=0',
+        where: 'is_deleted=0$catClause',
+        whereArgs: catArgs.isEmpty ? null : catArgs,
         orderBy: 'category, name_zh',
         limit: limit,
       );
@@ -202,8 +210,8 @@ class PosRepository {
     final rows = await d.query(
       'products',
       where:
-          'is_deleted=0 AND (name_zh LIKE ? OR name_en LIKE ? OR sku LIKE ? OR barcode LIKE ? OR category LIKE ?)',
-      whereArgs: [like, like, like, like, like],
+          'is_deleted=0 AND (name_zh LIKE ? OR name_en LIKE ? OR sku LIKE ? OR barcode LIKE ? OR category LIKE ?)$catClause',
+      whereArgs: [like, like, like, like, like, ...catArgs],
       orderBy: 'name_zh',
       limit: limit,
     );
@@ -732,6 +740,153 @@ class PosRepository {
       limit: limit,
     );
     return rows.map(AuditEntry.fromMap).toList();
+  }
+
+
+  Future<List<Category>> listCategories({bool includeDeleted = false}) async {
+    final d = await _db.db;
+    final rows = await d.query(
+      'categories',
+      where: includeDeleted ? null : 'is_deleted=0',
+      orderBy: 'name COLLATE NOCASE',
+    );
+    return rows.map(Category.fromMap).toList();
+  }
+
+  Future<Category> upsertCategory(Category c) async {
+    final d = await _db.db;
+    final name = c.name.trim();
+    if (name.isEmpty) throw StateError('category name required');
+    final now = DateTime.now().toIso8601String();
+    final existing = await d.query(
+      'categories',
+      where: 'name=? COLLATE NOCASE',
+      whereArgs: [name],
+      limit: 1,
+    );
+    final id = existing.isNotEmpty
+        ? (existing.first['id'] as String)
+        : (c.id.isEmpty ? AppDatabase.newId() : c.id);
+    final cat = Category(id: id, name: name, isDeleted: 0, updatedAt: now);
+    await d.insert('categories', cat.toMap(),
+        conflictAlgorithm: ConflictAlgorithm.replace);
+    return cat;
+  }
+
+  Future<void> renameCategory(String id, String newName) async {
+    final d = await _db.db;
+    final name = newName.trim();
+    if (name.isEmpty) throw StateError('category name required');
+    final rows = await d.query('categories', where: 'id=?', whereArgs: [id]);
+    if (rows.isEmpty) throw StateError('category not found');
+    final oldName = rows.first['name'] as String;
+    final now = DateTime.now().toIso8601String();
+    await d.transaction((txn) async {
+      await txn.update(
+        'categories',
+        {'name': name, 'updated_at': now, 'is_deleted': 0},
+        where: 'id=?',
+        whereArgs: [id],
+      );
+      await txn.update(
+        'products',
+        {'category': name},
+        where: 'category=? AND is_deleted=0',
+        whereArgs: [oldName],
+      );
+    });
+  }
+
+  Future<int> deleteCategory(String id) async {
+    final d = await _db.db;
+    final rows = await d.query('categories', where: 'id=?', whereArgs: [id]);
+    if (rows.isEmpty) throw StateError('category not found');
+    final name = rows.first['name'] as String;
+    var cleared = 0;
+    await d.transaction((txn) async {
+      cleared = await txn.update(
+        'products',
+        {'category': ''},
+        where: 'category=? AND is_deleted=0',
+        whereArgs: [name],
+      );
+      await txn.delete('categories', where: 'id=?', whereArgs: [id]);
+    });
+    return cleared;
+  }
+
+
+  Future<void> enqueueBarcodePrint({
+    required String productId,
+    required String barcode,
+    required String productName,
+    String sku = '',
+    int priceCents = 0,
+    int copies = 1,
+  }) async {
+    final d = await _db.db;
+    await d.insert('barcode_print_queue', {
+      'id': AppDatabase.newId(),
+      'product_id': productId,
+      'barcode': barcode,
+      'product_name': productName,
+      'sku': sku,
+      'price_cents': priceCents,
+      'copies': copies < 1 ? 1 : copies,
+      'status': 'pending',
+      'created_at': DateTime.now().toIso8601String(),
+      'synced_at': null,
+    });
+  }
+
+  Future<List<Map<String, Object?>>> listBarcodeQueue({String status = 'pending'}) async {
+    final d = await _db.db;
+    return d.query(
+      'barcode_print_queue',
+      where: 'status=?',
+      whereArgs: [status],
+      orderBy: 'created_at ASC',
+    );
+  }
+
+  Future<void> clearBarcodeQueueItem(String id, {String status = 'done'}) async {
+    final d = await _db.db;
+    await d.update(
+      'barcode_print_queue',
+      {'status': status, 'synced_at': DateTime.now().toIso8601String()},
+      where: 'id=?',
+      whereArgs: [id],
+    );
+  }
+
+  Future<void> removeBarcodeQueueItem(String id) async {
+    final d = await _db.db;
+    await d.delete('barcode_print_queue', where: 'id=?', whereArgs: [id]);
+  }
+
+  Future<bool> productImagesEnabled() async {
+    final v = await getSetting('product_images_enabled', fallback: '0');
+    return v == '1' || v.toLowerCase() == 'true';
+  }
+
+  Future<bool> btPrinterEnabled() async {
+    final v = await getSetting('bt_printer_enabled', fallback: '0');
+    return v == '1' || v.toLowerCase() == 'true';
+  }
+
+  Future<double> lowStockThreshold() async {
+    final raw = await getSetting('low_stock_threshold', fallback: '10');
+    return double.tryParse(raw) ?? 10;
+  }
+
+  Future<List<Product>> listLowStockProducts() async {
+    final threshold = await lowStockThreshold();
+    final d = await _db.db;
+    final rows = await d.rawQuery(
+      "SELECT * FROM products WHERE is_deleted=0 AND ((reorder_level > 0 AND stock <= reorder_level) OR (reorder_level <= 0 AND stock <= ?)) ORDER BY stock ASC, name_zh LIMIT 100",
+      [threshold],
+    );
+    return rows.map(Product.fromMap).toList();
   }
 
   /// Stock policy: `warn` (default) or `block`.

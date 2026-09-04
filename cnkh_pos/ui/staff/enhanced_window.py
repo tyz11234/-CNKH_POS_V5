@@ -6,7 +6,10 @@ from PySide6.QtWidgets import QMessageBox
 from cnkh_pos.config import AppPaths
 from cnkh_pos.services.checkout_rounding import RoundedSalesService
 from cnkh_pos.services.discounts import allocate_order_discount
-from cnkh_pos.services.lan_sync_server import publish_sync_event
+from cnkh_pos.services.lan_sync_server import (
+    publish_low_stock_events,
+    publish_sync_event,
+)
 from cnkh_pos.services.money import clamp_discount_cents, line_amount_cents
 from cnkh_pos.services.sales import SaleLine
 from cnkh_pos.ui.dialogs.checkout import SaleCompletedDialog
@@ -174,5 +177,6 @@ class StaffWindowEnhanced(BaseStaffWindow):
                 receipt_no=result.receipt_no,
                 sale_id=result.sale_id,
             )
+            publish_low_stock_events(self.database)
         except Exception:
             pass
