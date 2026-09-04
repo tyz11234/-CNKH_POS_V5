@@ -31,6 +31,7 @@ class AppPaths:
     exports: Path
     receipts: Path
     assets: Path
+    ereceipt_cache: Path
 
     @classmethod
     def default(cls) -> AppPaths:
@@ -44,6 +45,7 @@ class AppPaths:
             exports=root / "Exports",
             receipts=root / "Receipts",
             assets=root / "Assets",
+            ereceipt_cache=root / "EReceiptCache",
         )
 
     @property
@@ -59,6 +61,7 @@ class AppPaths:
             self.exports,
             self.receipts,
             self.assets,
+            self.ereceipt_cache,
         ):
             folder.mkdir(parents=True, exist_ok=True)
 

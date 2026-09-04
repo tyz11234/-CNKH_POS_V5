@@ -211,6 +211,7 @@ class CheckoutDialog(QDialog):
             exports=root / "Exports",
             receipts=root / "Receipts",
             assets=assets,
+            ereceipt_cache=root / "EReceiptCache",
         )
 
     def _build_duitnow_qr_panel(self) -> QWidget:

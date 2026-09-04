@@ -51,7 +51,10 @@ from cnkh_pos.services.lan_sync_server import (
 )
 from cnkh_pos.services.money import format_myr, rm_to_cents
 from cnkh_pos.services.printing import (
+    RECEIPT_TEXT_WIDTH,
     WINDOWS_DEFAULT_PRINTER,
+    _center_display,
+    _centered_setting_lines,
     resolve_printer_target,
 )
 from cnkh_pos.services.reports import ReportService
@@ -290,7 +293,7 @@ class ReceiptSettingsWidget(QWidget):
         self.user = user
         root = QHBoxLayout(self)
         form = QFormLayout()
-        self.store = QLineEdit("CNKH Hardware")
+        self.store = QLineEdit("黄金发宝号")
         self.address = QTextEdit()
         self.phone = QLineEdit()
         self.footer = QTextEdit("Thank you / 谢谢光临")
@@ -402,7 +405,7 @@ class ReceiptSettingsWidget(QWidget):
             value = json.loads(row["value_json"])
         except (TypeError, ValueError):
             return
-        self.store.setText(str(value.get("store_name", "CNKH Hardware")))
+        self.store.setText(str(value.get("store_name", "黄金发宝号")))
         self.address.setPlainText(str(value.get("address", "")))
         self.phone.setText(str(value.get("phone", "")))
         self.footer.setPlainText(str(value.get("footer", "Thank you / 谢谢光临")))
@@ -431,16 +434,31 @@ class ReceiptSettingsWidget(QWidget):
         self.printer.setCurrentIndex(max(0, index))
 
     def update_preview(self) -> None:
-        qr_note = ""
+        """Live preview uses the same CJK-aware centering as printed receipts."""
+        width = RECEIPT_TEXT_WIDTH
+        header: list[str] = []
+        header.extend(_centered_setting_lines(self.store.text(), width))
+        header.extend(_centered_setting_lines(self.address.toPlainText(), width))
+        header.extend(_centered_setting_lines(self.phone.text(), width))
+        body = [
+            "-" * width,
+            "Receipt: CNKH20260809-001",
+            "Cashier: Admin",
+            "-" * width,
+            "PVC Pipe 20mm",
+            "  1 pcs x RM 9.00".ljust(width - 8) + "RM 9.00",
+            "Hammer 2lb",
+            "  1 pcs x RM 15.90".ljust(width - 9) + "RM 15.90",
+            "-" * width,
+            ("TOTAL").ljust(width - 9) + "RM 24.90",
+            "-" * width,
+        ]
+        footer: list[str] = []
+        footer.extend(_centered_setting_lines(self.footer.toPlainText(), width))
+        footer.extend(_centered_setting_lines(self.notes.toPlainText(), width))
         if self.qr_enabled.isChecked() and self._current_qr_path() is not None:
-            qr_note = f"\n{'[QR image attached]':^32}"
-        self.preview.setPlainText(
-            f"{self.store.text():^32}\n{self.address.toPlainText():^32}\n{self.phone.text():^32}\n"
-            f"{'-' * 32}\nReceipt: CNKH20260809-001\nCashier: Admin\n{'-' * 32}\n"
-            f"PVC Pipe 20mm      RM 9.00\nHammer 2lb         RM 15.90\n{'-' * 32}\n"
-            f"TOTAL              RM 24.90\n{'-' * 32}\n{self.footer.toPlainText():^32}\n{self.notes.toPlainText():^32}"
-            f"{qr_note}"
-        )
+            footer.append(_center_display("[QR image attached]", width))
+        self.preview.setPlainText("\n".join([*header, *body, *footer]))
 
     def save(self) -> None:
         selected = self.printer.currentData()
