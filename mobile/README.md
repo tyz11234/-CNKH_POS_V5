@@ -1,84 +1,101 @@
-# CNKH POS Mobile / CNKH 手机收银助手
+# 黄金发宝号 · 手机收银助手（Android APK）
 
-Phone-first Flutter companion for **CNKH Hardware POS V5** (offline desktop SQLite).
+Flutter 手机端，配合桌面 **[CNKH Hardware POS V5](https://github.com/tyz11234/-CNKH_POS_V5)** 使用。  
+登录页 / 顶栏店名：**黄金发宝号** · 工程包名仍为 `cnkh_pos_mobile`。
 
-手机端 Flutter 配套应用，配合 **CNKH Hardware POS V5** 离线桌面收银使用。
+**当前版本：1.4.1**（店名更新）· 上一功能包 1.4.0（连续扫码 / 分类 / 商品图 / BT 等）
 
-## Version
+---
 
-**1.2.0** — local-first full PC feature port (SQLite). See `/workspace/cnkh-v5/MOBILE_FULL_PORT_NOTES.md`.
+## 下载安装（Android）
 
-## Features / 功能
+1. 打开 [Releases](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases)
+2. 下最新 `CNKH_POS_Mobile.apk`（或带版本号的同名文件）
+3. 手机允许「未知来源」安装 → 打开 App
+4. 用 **Admin / Staff** 账号登录（演示账号见设置或店内约定）
+5. **设置**里导入 DuitNow 收款码（仅 Admin 可改；Staff 只读）
 
-| Screen | 中文 | Notes |
-|--------|------|-------|
-| Login | 员工登录 | Demo stub — any PIN |
-| POS Cart | 收银台 | Sample hardware SKUs, large taps |
-| Checkout | 结账 | Cash / Card / **DuitNow QR** (full-screen QR) |
-| Settings | 设置 | Import DuitNow QR (Admin) / view (Staff); store name |
-| Today | 今日销售 | Local SQLite sales list |
-| Admin | 管理 | Dashboard, products, entities, purchases, stocktake, reports, closing, maintenance |
+> 本仓发布 **APK**；源码与桌面端在 [‑CNKH_POS_V5](https://github.com/tyz11234/-CNKH_POS_V5)。iOS 需 Mac + Apple 签名，Linux 无法直接出可装 IPA。
 
-- Branding matches desktop navy / `#102E64` / `#1769E0`
-- QR is **device-local** for demo; Admin sync from desktop is TBD
-- Does **not** talk to desktop SQLite (no API server yet)
+---
 
-## Install APK (Android) / 安装安卓包
+## 和电脑一起用（局域网，无云）
 
-1. Copy `CNKH_POS_Mobile.apk` to the phone (USB, Drive, chat, etc.).
-2. On phone: allow **Install unknown apps** for that source.
-3. Open the APK → Install → Open **CNKH POS Mobile**.
-4. Sign in with any username + PIN (demo).
-5. Open **设置 Settings** → import your DuitNow QR image from gallery.
-6. Add items → **结账 Checkout** → choose **DuitNow QR** → show full-screen QR to customer.
+| 步骤 | 做什么 |
+|------|--------|
+| 1 | 手机与 PC **同一 Wi‑Fi** |
+| 2 | PC 顶栏 **同步/配对**，开服务（默认端口 **8787**） |
+| 3 | 手机顶栏 **扫码配对**，扫 PC 二维码 |
+| 4 | 看连接状态点；结账后销售应近实时互见 |
 
-正式 APK 产物路径（构建后）：
+扫不了时可在 **设置 → LAN Sync → 高级** 手填 `http://电脑IP:8787` 与 Token。
 
-- `mobile/build/app/outputs/flutter-apk/app-release.apk`
-- 复制件：`/workspace/cnkh-v5/artifacts/CNKH_POS_Mobile.apk`
+配对码格式：
 
-### Build locally / 本地构建
+```text
+cnkh-sync:v1|{"baseUrl":"http://192.168.x.x:8787","token":"...","name":"CNKH-PC"}
+```
+
+---
+
+## 手机端功能一览
+
+| 模块 | 说明 |
+|------|------|
+| 收银 POS | 搜索 / 分类芯片过滤、连续摄像头扫码、挂单超时提醒 |
+| 结账 | 现金 / 卡 / DuitNow / 赊账、找零、折扣审计 |
+| 电子收据 | 生成 PDF，系统分享（含 WhatsApp）；临时文件用后删 |
+| 今日 | 销售列表、搜索单号/手机/客户 |
+| 管理 | 商品（自动/手动条码）、分类（选择器不手打）、客户供应商、进货、盘点、报表、日结 |
+| 商品图 | 可选开启；文件在 `product_images/`，与 SQLite 分开 |
+| 条码 | 打印队列 + **批量导出 PNG**（条码下带商品全名） |
+| 蓝牙小票 | 可选（默认关） |
+| 低库存 | LAN 推送提醒 |
+| 角色 | Admin 可改收款码；Staff 收银为主 |
+
+### 故意只在 PC 做的
+
+- 条码**标签打印机**硬件对话框  
+- Windows 备份 / 还原整库  
+
+其余日常收银 / 管货手机基本可对等。对照表见仓库内 `MOBILE_PC_PARITY.md`（若已同步）。
+
+---
+
+## 版本简表
+
+| Tag | 要点 |
+|-----|------|
+| **v1.4.1-mobile** | 登录/品牌：**黄金发宝号** |
+| v1.4.0-mobile | 连续扫码、分类对齐 PC、商品图、BT、条码批量导出 |
+| v1.3.0 / 1.2.0 | LAN 同步、电子收据、摄像头扫码、本机 SQLite 全功能移植 |
+
+---
+
+## 开发者构建
 
 ```bash
-export JAVA_HOME=... ANDROID_HOME=...
-cd mobile
+cd mobile   # 若在 monorepo；本 APK 仓根目录即 Flutter 工程时直接：
 flutter pub get
 flutter build apk --release
-flutter build appbundle --release   # optional Play Store AAB
+# 产物：build/app/outputs/flutter-apk/app-release.apk
 ```
 
-## IPA (iOS) / 苹果安装包
+桌面联调文档（若在源码树）：`LAN_SYNC.md` · `E_RECEIPT_AND_SCAN.md` · `NEXT_BATCH_NOTES.md`
 
-**Linux cannot produce a signed IPA.** Options:
+---
 
-1. **macOS + Xcode** (Apple Developer account required for device install / TestFlight):
+## 相关链接
 
-```bash
-cd mobile
-flutter build ipa   # requires signing team in Xcode
-# or unsigned compile check:
-flutter build ios --no-codesign
-```
+- **PC 仓库（装 Windows / 开同步）**：[tyz11234/-CNKH_POS_V5](https://github.com/tyz11234/-CNKH_POS_V5)
+- **本仓 Releases（下 APK）**：[Releases](https://github.com/tyz11234/CNKH_POS_Mobile_APK/releases)
 
-2. **GitHub Actions** — see `.github/workflows/mobile-ios.yml` (needs Apple certs/secrets).
+有问题先看：同一 Wi‑Fi、防火墙放行 8787、PC 已点「同步/配对」、手机 Token 一致。
 
-Without Apple Developer signing, IPA cannot be installed on a physical iPhone.
 
-没有 Apple 开发者签名时，无法在真机安装 IPA。
+## 扫码进货 / Purchase scan
 
-## Project layout / 目录
+进货页（管理 → 进货）支持扫码进货、进货单二维码（`CNKHPO1:` JSON）、拍照/选图 OCR（本机 ML Kit）、粘贴文本；核对页标注「已有商品」/「将新建」，确认后建档入库。可选用或内联新增供应商。
 
-```
-mobile/
-  lib/
-    main.dart
-    theme/cnkh_theme.dart
-    screens/   # login, cart, checkout, settings
-    widgets/   # money, DuitNow QR
-    services/  # device-local QR storage
-  android/ ios/
-```
+详见应用内「进货单二维码格式」帮助。APK 重建：`flutter build apk --release`（本目录）。
 
-## License / 说明
-
-Companion demo for CNKH Hardware store use. Desktop POS remains system of record.

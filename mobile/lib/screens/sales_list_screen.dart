@@ -5,6 +5,7 @@ import '../services/pos_repository.dart';
 import '../theme/cnkh_theme.dart';
 import '../widgets/e_receipt_actions.dart';
 import '../widgets/money_text.dart';
+import 'sale_receipt_detail_screen.dart';
 
 class SalesListScreen extends StatefulWidget {
   final PosRepository repo;
@@ -158,7 +159,10 @@ class _SalesListScreenState extends State<SalesListScreen> {
                 ),
               ),
               const SizedBox(height: 8),
-              Row(
+              Wrap(
+                spacing: 4,
+                runSpacing: 0,
+                crossAxisAlignment: WrapCrossAlignment.center,
                 children: [
                   TextButton.icon(
                     onPressed: _pickFrom,
@@ -213,53 +217,110 @@ class _SalesListScreenState extends State<SalesListScreen> {
                           final voided = s.voided == 1;
                           return Card(
                             color: voided ? const Color(0xFFFFF1F1) : null,
-                            child: ListTile(
-                              title: Text(
-                                '${s.receiptNo} · ${s.paymentMethod}',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  decoration: voided
-                                      ? TextDecoration.lineThrough
-                                      : null,
-                                ),
+                            clipBehavior: Clip.antiAlias,
+                            child: InkWell(
+                              onTap: () => SaleReceiptDetailScreen.open(
+                                context,
+                                sale: s,
+                                repo: widget.repo,
                               ),
-                              subtitle: Text(
-                                '${s.soldAt.substring(0, 19).replaceFirst('T', ' ')}\n'
-                                '${s.customerName ?? s.cashier}'
-                                '${(s.customerPhone ?? '').isNotEmpty ? ' · ${s.customerPhone}' : ''}'
-                                '${s.creditOutstandingCents > 0 ? ' · 欠 ${formatRm(s.creditOutstandingCents)}' : ''}'
-                                '${voided ? '\nVOID: ${s.voidNote}' : ''}',
-                              ),
-                              isThreeLine: true,
-                              trailing: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                crossAxisAlignment: CrossAxisAlignment.end,
+                              child: Padding(
+                              padding: const EdgeInsets.fromLTRB(12, 10, 8, 10),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  MoneyText(amountCents: s.totalCents, fontSize: 16),
-                                  Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      if (!voided)
-                                        IconButton(
-                                          tooltip: 'E-receipt PDF',
-                                          icon: const Icon(Icons.picture_as_pdf,
-                                              color: Color(0xFF25D366), size: 22),
-                                          onPressed: () => sendEReceiptFlow(
-                                            context,
-                                            sale: s,
-                                            repo: widget.repo,
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          '${s.receiptNo} · ${s.paymentMethod}',
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.w800,
+                                            decoration: voided
+                                                ? TextDecoration.lineThrough
+                                                : null,
                                           ),
                                         ),
-                                      if (widget.canVoid && !voided)
-                                        TextButton(
-                                          onPressed: () => _void(s),
-                                          child: const Text('作废',
-                                              style: TextStyle(fontSize: 12)),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          '${s.soldAt.substring(0, 19).replaceFirst('T', ' ')}',
+                                          style: const TextStyle(
+                                            fontSize: 12,
+                                            color: CnkhColors.muted,
+                                          ),
                                         ),
+                                        Text(
+                                          '${s.customerName ?? s.cashier}'
+                                          '${(s.customerPhone ?? '').isNotEmpty ? ' · ${s.customerPhone}' : ''}'
+                                          '${s.creditOutstandingCents > 0 ? ' · 欠 ${formatRm(s.creditOutstandingCents)}' : ''}',
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 13),
+                                        ),
+                                        if (voided)
+                                          Text(
+                                            'VOID: ${s.voidNote}',
+                                            style: const TextStyle(
+                                              fontSize: 12,
+                                              color: Color(0xFFB00020),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.end,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      MoneyText(
+                                          amountCents: s.totalCents, fontSize: 16),
+                                      const SizedBox(height: 2),
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          if (!voided)
+                                            IconButton(
+                                              visualDensity:
+                                                  VisualDensity.compact,
+                                              tooltip: 'E-receipt PDF',
+                                              icon: const Icon(
+                                                Icons.picture_as_pdf,
+                                                color: Color(0xFF25D366),
+                                                size: 22,
+                                              ),
+                                              onPressed: () => sendEReceiptFlow(
+                                                context,
+                                                sale: s,
+                                                repo: widget.repo,
+                                              ),
+                                            ),
+                                          if (widget.canVoid && !voided)
+                                            TextButton(
+                                              style: TextButton.styleFrom(
+                                                visualDensity:
+                                                    VisualDensity.compact,
+                                                padding: EdgeInsets.zero,
+                                                minimumSize: const Size(36, 28),
+                                                tapTargetSize:
+                                                    MaterialTapTargetSize
+                                                        .shrinkWrap,
+                                              ),
+                                              onPressed: () => _void(s),
+                                              child: const Text('作废',
+                                                  style: TextStyle(fontSize: 12)),
+                                            ),
+                                        ],
+                                      ),
                                     ],
                                   ),
                                 ],
                               ),
+                            ),
                             ),
                           );
                         },
